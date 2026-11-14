@@ -1,5 +1,7 @@
 # F1 Championship Edition (PS3) – static recompilation
 
+Join the Discord server: https://discord.gg/Ctr4k6HQ9
+
 Translates the game's PPU executable (`EBOOT.elf`, PowerPC64/Cell) into C++ and links it with a
 runtime that reimplements the PS3 kernel (LV2), the system libraries (HLE), the SPUs and the RSX
 GPU, producing native x86-64 executables for Windows and Linux. Game data is never embedded: the
