@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cerrno>
 #include <cstdarg>
 #include <cstring>
 #include <map>
@@ -327,7 +328,8 @@ void set_thread_name(const char* name) {
 #endif
 }
 
-// F1CE_THREAD_CPU=1: with the "cpu:" line, the cores used by each thread over the last window (threads above 2%)
+// F1CE_THREAD_CPU=1: with the "cpu:" line, the cores used by each thread over the last window (threads above 2%); on Linux
+// on unless F1CE_THREAD_CPU=0
 void log_thread_cpu() {
 #ifdef _WIN32
     static const bool on = getenv("F1CE_THREAD_CPU") != nullptr;
@@ -381,16 +383,23 @@ void log_thread_cpu() {
     }
     last_wall = wall;
 #else
-    static const bool on = getenv("F1CE_THREAD_CPU") != nullptr;
+    // on by default here (F1CE_THREAD_CPU=0: off): cheap, and the Deck runs are where it is needed
+    static const bool on = !getenv("F1CE_THREAD_CPU") || getenv("F1CE_THREAD_CPU")[0] != '0';
     if (!on) return;
     static std::map<long, u64> last;
+    static bool told = false;
+    if (!told) { told = true; LOG_I("thread cpu: on (from /proc/self/task)"); }
     static u64 last_wall = 0;
     static const double tick_us = 1e6 / (double)sysconf(_SC_CLK_TCK);
     const u64 wall = time_usec();
     std::vector<std::pair<double, std::string>> rows;
     std::map<long, u64> now;
     DIR* d = opendir("/proc/self/task");
-    if (!d) return;
+    if (!d) {
+        static bool warned = false;
+        if (!warned) { warned = true; LOG_W("thread cpu: /proc/self/task not readable (errno %d)", errno); }
+        return;
+    }
     while (dirent* e = readdir(d)) {
         const long tid = atol(e->d_name);
         if (tid <= 0) continue;
