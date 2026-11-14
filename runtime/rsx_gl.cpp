@@ -633,6 +633,7 @@ bool start_compile_thread() {
     if (ctxs.empty()) return false;
     LOG_I("rsx: %zu shader compile threads", ctxs.size());
     for (void* ctx : ctxs) std::thread([ctx] {
+        lower_thread_priority(10);
         host::gl_make_current(ctx);
         for (;;) {
             std::shared_ptr<CompileJob> job;

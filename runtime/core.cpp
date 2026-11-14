@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdarg>
+#include <cstring>
 #include <map>
 #include <set>
 #include <string>
@@ -22,6 +23,7 @@
 #include <signal.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
+#include <dirent.h>
 #include <unistd.h>
 #include <linux/futex.h>
 #include <sys/syscall.h>
@@ -369,6 +371,51 @@ void log_thread_cpu() {
         CloseHandle(h);
     }
     CloseHandle(snap);
+    last.swap(now);
+    if (last_wall) {
+        std::sort(rows.begin(), rows.end(), [](auto& a, auto& b) { return a.first > b.first; });
+        std::string s;
+        char b[96];
+        for (auto& [cores, name] : rows) { snprintf(b, sizeof(b), " %s %.2f", name.c_str(), cores); s += b; }
+        LOG_I("thread cpu:%s", s.c_str());
+    }
+    last_wall = wall;
+#else
+    static const bool on = getenv("F1CE_THREAD_CPU") != nullptr;
+    if (!on) return;
+    static std::map<long, u64> last;
+    static u64 last_wall = 0;
+    static const double tick_us = 1e6 / (double)sysconf(_SC_CLK_TCK);
+    const u64 wall = time_usec();
+    std::vector<std::pair<double, std::string>> rows;
+    std::map<long, u64> now;
+    DIR* d = opendir("/proc/self/task");
+    if (!d) return;
+    while (dirent* e = readdir(d)) {
+        const long tid = atol(e->d_name);
+        if (tid <= 0) continue;
+        char path[64], buf[512];
+        snprintf(path, sizeof(path), "/proc/self/task/%ld/stat", tid);
+        FILE* f = fopen(path, "r");
+        if (!f) continue;
+        const size_t len = fread(buf, 1, sizeof(buf) - 1, f);
+        fclose(f);
+        buf[len] = 0;
+        // "tid (comm) state ..." with utime and stime the 14th and 15th fields (comm may hold spaces and parentheses)
+        char* open = strchr(buf, '(');
+        char* close = strrchr(buf, ')');
+        if (!open || !close) continue;
+        unsigned long long ut = 0, st = 0;
+        if (sscanf(close + 2, "%*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %llu %llu", &ut, &st) != 2) continue;
+        const u64 t = (u64)((ut + st) * tick_us);
+        now[tid] = t;
+        auto it = last.find(tid);
+        if (last_wall && it != last.end()) {
+            const double cores = (double)(t - it->second) / (double)(wall - last_wall);
+            if (cores >= 0.02) rows.push_back({cores, std::string(open + 1, close)});
+        }
+    }
+    closedir(d);
     last.swap(now);
     if (last_wall) {
         std::sort(rows.begin(), rows.end(), [](auto& a, auto& b) { return a.first > b.first; });
@@ -869,8 +916,21 @@ void raise_thread_priority(bool highest) {
     if (off) return;
     if (setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), highest ? -10 : -5) != 0) {
         static std::atomic<bool> warned{false};
-        if (!warned.exchange(true)) LOG_I("thread priority: not raised (no permission), all threads at normal priority");
+        if (!warned.exchange(true)) LOG_I("thread priority: not raised (no permission), background threads lowered instead");
     }
+#endif
+}
+
+// Threads off the frame's critical path (SPU workers, pipeline compile threads). Linux only: a higher nice value needs no
+// permission, so where raise_thread_priority is refused (SteamOS) main, the renderer and the task threads still come before
+// them on a machine with fewer cores than busy threads (Steam Deck: 5 SPU workers, main and the renderer on 4 cores / 8
+// threads). Windows: nothing, the critical threads are raised there instead. F1CE_PRIO=0: off.
+void lower_thread_priority(int nice) {
+#ifdef _WIN32
+    (void)nice;
+#else
+    static const bool off = getenv("F1CE_PRIO") && getenv("F1CE_PRIO")[0] == '0';
+    if (!off) setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), nice);
 #endif
 }
 

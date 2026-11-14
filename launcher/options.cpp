@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <list>
 #include <thread>
 
 #include "../runtime/self_decrypt.h"
@@ -91,6 +92,9 @@ std::vector<Option> make_options() {
                        0, "The game's language when its language menu is skipped; otherwise the one the menu starts on."));
     v.push_back(choice(GENERAL, "Season pack", "F1CE_MOD_PACK", {{"None (original game)", nullptr}}, 0,
                        "The folders of MODS next to the launcher: a pack replaces the game's files with its own."));
+    v.push_back(choice(GENERAL, "Player helmets", "F1CE_HELMET_PACK", {{"Original", nullptr}}, 0,
+                       "The folders of PLAYER_HELMETS next to the launcher: your own helmet designs for the profile, "
+                       "used with every season pack."));
     v.push_back(toggle(GENERAL, "Skip intro", "F1CE_SKIP_INTRO",
                        "Skips the language menu and the intro movies: the game starts at Press Start."));
     v.push_back(toggle(GENERAL, "No log file", "F1CE_NO_LOG",
@@ -346,17 +350,17 @@ void apply_preset(int p, const Ini& ini) {
         if (const std::string* v = ini.get(CUSTOM_SECTION, e)) select_value(*find(e), v->empty() ? nullptr : v->c_str());
 }
 
-// ---------------------------------------------------------------- season packs, GPUs
-void add_season_packs() {
-    static std::vector<std::string> names;   // (stable: the choices are copies anyway)
+// ---------------------------------------------------------------- season packs, helmet packs, GPUs
+// one choice per folder of <data dir>/<folder>: the folder name is the pack's name and the variable's value
+void add_packs(const char* key, const char* folder) {
+    static std::list<std::vector<std::string>> lists;   // (the values point into these: kept alive)
+    std::vector<std::string>& names = lists.emplace_back();
     std::error_code ec;
-    for (const auto& e : fs::directory_iterator(P(g_data_dir) / "MODS", ec))
+    for (const auto& e : fs::directory_iterator(P(g_data_dir) / folder, ec))
         if (e.is_directory(ec) && S(e.path().filename())[0] != '.') names.push_back(S(e.path().filename()));
     std::sort(names.begin(), names.end());
-    Option& o = *find("F1CE_MOD_PACK");
-    for (const std::string& n : names) o.choices.push_back({n, nullptr});
-    // (the value points into names: kept alive)
-    for (size_t i = 1; i < o.choices.size(); i++) o.choices[i].value = names[i - 1].c_str();
+    Option& o = *find(key);
+    for (const std::string& n : names) o.choices.push_back({n, n.c_str()});
 }
 
 // one choice per GPU (DXGI adapter, software ones left out); the value is its PCI ids "vvvv:dddd" (hex), which the
@@ -505,7 +509,8 @@ void init(const std::string& exe_dir) {
         if (!fs::exists(data, ec) && fs::is_directory(old / "dev_hdd0" / "home", ec))
             fs::copy(old, data, fs::copy_options::recursive, ec);
     }
-    add_season_packs();
+    add_packs("F1CE_MOD_PACK", "MODS");
+    add_packs("F1CE_HELMET_PACK", "PLAYER_HELMETS");
     add_gpus();
 }
 const std::string& exe_dir() { return g_exe_dir; }
@@ -622,6 +627,7 @@ std::string start_game(Ini& ini, std::function<void(unsigned)> exited) {
         if (o.kind == TEXT && strcmp(o.key, "extra")) set_env(o.key, o.text.empty() ? nullptr : o.text.c_str());
     }
     set_env("F1CE_MODS_DIR", S(P(g_data_dir) / "MODS").c_str());
+    set_env("F1CE_HELMETS_DIR", S(P(g_data_dir) / "PLAYER_HELMETS").c_str());
     {   // extra: NAME=value tokens
         const std::string extra = (g_dev_mode ? find("extra")->text : std::string()) + " ";
         size_t s = 0;

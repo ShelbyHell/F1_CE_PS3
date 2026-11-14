@@ -39,7 +39,8 @@ HOOKS = {0x3FB310: "camera_projection_hook",   # camera projection and frustum, 
          0x4C6280: "engine_snd_hook",   # hle_misc.cpp: a car's engine sound (grain engine inputs and update)
          0x5A9120: "lua_os_exit_hook", 0x5A566C: "lua_print_hook",
          0x58DE18: "lua_rawrunprotected_hook", 0x58DDA4: "lua_throw_hook",
-         0x5A8EF0: "lua_os_getenv_hook"}   # hle_frontend.cpp
+         0x5A8EF0: "lua_os_getenv_hook",   # hle_frontend.cpp
+         0x1BFC14: "points_hook"}   # mods.cpp: championship points for a finishing position (season pack)
 # debug probes: runtime code called with the context before the instruction at that address
 PROBES = {0x1187EC: "probe_1187ec", 0x11B05C: "probe_11b05c",   # hle_physics.cpp
           0x489AAC: "flip_label_written",   # hle_gcm.cpp: the flip handler set a label the RSX may wait for
@@ -51,7 +52,8 @@ PROBES = {0x1187EC: "probe_1187ec", 0x11B05C: "probe_11b05c",   # hle_physics.cp
           0x551278: "jobwait_551228", 0x551354: "jobwait_55127c", 0x55140C: "jobwait_5513b8",   # spu_pm.cpp: taken jobs
           0x5514A0: "jobpoll_551410",   # spu_pm.cpp: the MP3 decoder's "queue done?" poll
           0x5BBBB4: "audio_cmd",   # hle_misc.cpp: the sound engine's command dispatch (F1CE_AUDIO_CMD_LOG)
-          0x7534C: "lua_script_loaded", 0x75428: "lua_script_ran"}   # hle_frontend.cpp: front-end script loader
+          0x7534C: "lua_script_loaded", 0x75428: "lua_script_ran",   # hle_frontend.cpp: front-end script loader
+          0x4A528: "wad_entry_name"}   # mods.cpp: archive entry names asked for (F1CE_WAD_NAMES)
 SPIN_LOOPS = {0x551228, 0x5513BC}   # the job manager's waits: they only poll counters the SPUs write
 
 LOAD_INT = {  # mnemonic: (size, signed, update, indexed)

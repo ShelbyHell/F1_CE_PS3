@@ -204,6 +204,7 @@ FORCE_INLINE u64 prof_usec() { return (u64)(((unsigned __int128)__rdtsc() * g_ts
 void sleep_usec(u64 us);
 void sleep_until_precise(u64 t);   // core.cpp: until time_usec() == t, without the ~2 ms overshoot of sleep_for
 void raise_thread_priority(bool highest = false);   // core.cpp: threads on the frame's critical path (F1CE_PRIO=0: off)
+void lower_thread_priority(int nice);               // core.cpp: background threads, Linux only (F1CE_PRIO=0: off)
 u64 process_cpu_usec();   // user + kernel time of all threads
 // Wait of a polling thread with nothing to do: short waits (they spin, for latency) until it has been idle for 3 ms, then
 // a real sleep. Under load the idle spells are shorter, so the 1 ms of latency only applies in menus and pauses.

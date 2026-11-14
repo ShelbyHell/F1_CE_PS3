@@ -69,7 +69,7 @@ namespace {
     X(vkCreateDescriptorPool) X(vkAllocateDescriptorSets) X(vkUpdateDescriptorSets) X(vkCreatePipelineLayout)        \
     X(vkCreateShaderModule) X(vkCreateGraphicsPipelines) X(vkCreateComputePipelines) X(vkCreatePipelineCache)        \
     X(vkGetPipelineCacheData) X(vkCreateQueryPool) X(vkGetQueryPoolResults) X(vkCmdResetQueryPool)                   \
-    X(vkCmdBeginQuery) X(vkCmdEndQuery) X(vkCmdBeginRendering) X(vkCmdEndRendering) X(vkCmdPipelineBarrier2)         \
+    X(vkCmdBeginQuery) X(vkCmdEndQuery) X(vkCmdWriteTimestamp2) X(vkCmdBeginRendering) X(vkCmdEndRendering) X(vkCmdPipelineBarrier2)         \
     X(vkCmdBindPipeline) X(vkCmdBindDescriptorSets) X(vkCmdBindIndexBuffer) X(vkCmdDrawIndexed) X(vkCmdDraw)         \
     X(vkCmdDispatch) X(vkCmdPushConstants) X(vkCmdClearAttachments) X(vkCmdClearColorImage)                          \
     X(vkCmdClearDepthStencilImage) X(vkCmdCopyBuffer) X(vkCmdCopyBufferToImage) X(vkCmdCopyImageToBuffer)            \
@@ -117,10 +117,10 @@ constexpr u32 SLOTS = 8, QUERIES = 4096;
 struct Slot {
     VkCommandPool pool = 0;
     VkCommandBuffer cb = 0, ucb = 0;   // draws; uploads, which run first
-    VkQueryPool qpool = 0;
+    VkQueryPool qpool = 0, tpool = 0;   // occlusion; GPU start and end timestamps of the submission
     u32 qused = 0;
     u64 qfirst = 0, serial = 0;        // id of its first query, serial it was submitted with
-    bool qread = true;
+    bool qread = true, tread = true;
 };
 Slot g_slots[SLOTS];
 u32 g_slot = 0;
@@ -926,6 +926,7 @@ void start_workers() {
     if (const char* e = getenv("F1CE_COMPILE_THREADS")) n = std::clamp(atoi(e), 1, 32);
     LOG_I("rsx: %d pipeline threads", n);
     for (int i = 0; i < n; i++) std::thread([] {
+        lower_thread_priority(10);
         for (;;) {
             std::function<void()> job;
             {
@@ -1821,10 +1822,27 @@ void zpass_resolve() {
 }
 
 // ------------------------------------------------------------------ command buffers
+// GPU busy time (perf gpu: line): each submission's span from its first command to its last, overlaps with the previous
+// one left out. Slots are read back in submission order (begin_slot), 8 submissions late.
+bool g_ts_ok = false;
+u64 g_gpu_busy_ns = 0, g_gpu_max_ns = 0, g_gpu_last_end = 0;
+void slot_read_timestamps(Slot& s) {
+    if (s.tread) return;
+    s.tread = true;
+    u64 t[2];
+    if (vkGetQueryPoolResults(g_dev, s.tpool, 0, 2, sizeof(t), t, 8, VK_QUERY_RESULT_64_BIT) != VK_SUCCESS || t[1] < t[0]) return;
+    const double period = g_props.limits.timestampPeriod;
+    const u64 start = std::max(t[0], g_gpu_last_end), span = (u64)((t[1] - t[0]) * period);
+    if (t[1] > start) g_gpu_busy_ns += (u64)((t[1] - start) * period);
+    g_gpu_max_ns = std::max(g_gpu_max_ns, span);
+    g_gpu_last_end = std::max(g_gpu_last_end, t[1]);
+}
+
 void begin_slot() {
     Slot& s = g_slots[g_slot];
     if (s.serial) wait_serial(s.serial);
     slot_read_queries(s);
+    slot_read_timestamps(s);
     s.serial = 0;   // (recording: zpass_resolve must not read its queries)
     check(vkResetCommandPool(g_dev, s.pool, 0), "vkResetCommandPool");
     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
@@ -1834,6 +1852,10 @@ void begin_slot() {
     g_cb = s.cb;
     g_ucb = s.ucb;
     vkCmdResetQueryPool(s.ucb, s.qpool, 0, QUERIES);
+    if (g_ts_ok) {
+        vkCmdResetQueryPool(s.ucb, s.tpool, 0, 2);
+        vkCmdWriteTimestamp2(s.ucb, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, s.tpool, 0);
+    }
     s.qused = 0;
     s.qread = false;
     g_dyn.valid = false;
@@ -1845,6 +1867,7 @@ void submit(VkSemaphore wait, VkSemaphore signal) {
     end_pass();
     Slot& s = g_slots[g_slot];
     memory_barrier(s.ucb);
+    if (g_ts_ok) { vkCmdWriteTimestamp2(s.cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, s.tpool, 1); s.tread = false; }
     check(vkEndCommandBuffer(s.ucb), "vkEndCommandBuffer");
     check(vkEndCommandBuffer(s.cb), "vkEndCommandBuffer");
     VkCommandBufferSubmitInfo cbs[2]{{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO}, {VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO}};
@@ -2266,6 +2289,7 @@ void create_device() {
         if (pres && (qf[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) && (qf[i].queueFlags & VK_QUEUE_COMPUTE_BIT)) { g_qfam = i; found = true; }
     }
     if (!found) fatal("no queue that draws and presents");
+    g_ts_ok = qf[g_qfam].timestampValidBits >= 64 && g_props.limits.timestampPeriod > 0;
 
     // features
     VkPhysicalDeviceExtendedDynamicState3FeaturesEXT eds3{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_3_FEATURES_EXT};
@@ -2365,6 +2389,11 @@ void create_objects() {
         qi.queryType = VK_QUERY_TYPE_OCCLUSION;
         qi.queryCount = QUERIES;
         check(vkCreateQueryPool(g_dev, &qi, nullptr, &s.qpool), "vkCreateQueryPool");
+        if (g_ts_ok) {
+            qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            qi.queryCount = 2;
+            check(vkCreateQueryPool(g_dev, &qi, nullptr, &s.tpool), "vkCreateQueryPool");
+        }
     }
 
     // rings and heaps
@@ -2760,6 +2789,10 @@ void flip(u32 ea, u32 pitch, u32 width, u32 height) {
             LOG_I("perf front: ms draw calls %.2f (attributes %.2f params+pass %.2f) clears %.2f flip %.2f semaphore waits %.2f | %.0f commands %.0f words, %.0f slow entries (%.0f nops %.0f flow)",
                   g_fe.t_draw / nf / 1e3, g_prof.t_pre / nf / 1e3, g_prof.t_bind / nf / 1e3, g_fe.t_clear / nf / 1e3, g_fe.t_flip / nf / 1e3,
                   g_fe.t_sem / nf / 1e3, g_fe.cmds / nf, g_fe.words / nf, g_fe.entries / nf, g_fe.nops / nf, g_fe.flows / nf);
+            if (g_ts_ok)   // near 100% busy: the GPU sets the frame rate
+                LOG_I("perf gpu: busy %.1f ms per frame (%.0f%% of the time), longest submission %.1f ms", g_gpu_busy_ns / nf / 1e6,
+                      g_gpu_busy_ns / 10.0 / wall, g_gpu_max_ns / 1e6);
+            g_gpu_busy_ns = g_gpu_max_ns = 0;
             g_fe = {};
             g_prof = {};
             window_start = now;
