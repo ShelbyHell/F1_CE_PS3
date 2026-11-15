@@ -1223,10 +1223,16 @@ GLuint upload_texture(u32 unit, bool* is_surface, int* depth_func) {
         u64 tc = prof_usec();
         glBindBuffer(GL_TEXTURE_BUFFER, g_tex_staging);
         glBufferData(GL_TEXTURE_BUFFER, (total + 3) & ~3u, gmem(lea0), GL_STREAM_DRAW);   // (a new store: no wait)
+        // image stores into an incomplete texture are dropped (GL spec; NVIDIA enforces it, AMD does not): every level
+        // and the level range / filter must exist before the first dispatch, or a texture's first upload stays empty
+        // (static ones for good: the UI box art was missing on NVIDIA)
+        for (u32 l = 0; l < levels; l++)
+            glTexImage2D(GL_TEXTURE_2D, (GLint)l, GL_RGBA8, (GLsizei)std::max(1u, iw >> l), (GLsizei)std::max(1u, ih >> l), 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, (GLint)levels - 1);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, levels > 1 ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
         glUseProgram(g_tex_cs);
         for (u32 l = 0; l < levels; l++) {
             u32 lw = std::max(1u, iw >> l), lh = std::max(1u, ih >> l);
-            glTexImage2D(GL_TEXTURE_2D, (GLint)l, GL_RGBA8, (GLsizei)lw, (GLsizei)lh, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
             glBindImageTexture(0, te.tex, (GLint)l, GL_FALSE, 0, 0x88B9 /*GL_WRITE_ONLY*/, GL_RGBA8);
             const GLint lvl[4] = {(GLint)off, (GLint)lw, (GLint)lh, (GLint)base_fmt};
             const GLint lay[4] = {linear ? 1 : 0, (GLint)(pitch ? pitch : lw * bpp), (GLint)bpp, (GLint)(ilog2(lw) | (ilog2(lh) << 8))};
