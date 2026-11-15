@@ -18,12 +18,19 @@ template writes (folders named by the database ids: CARS/Honda, DRIVERS/jbutton,
   CARS/<team>/model/<team>.obj      with --models: the car (lod0) for Blender, with its textures as DDS; edit it
                                     (any vertex / triangle count, new UVs) and build imports the changed parts into
                                     the race model and the garage model (sg.py objimport; object names must stay;
-                                    skinned parts are not)
+                                    skinned parts are not); the decal UVs (uv1) are not in the OBJ
+  CARS/<team>/model/<team>.glb      with --models: the same car as glTF with both UV sets (UVMap = paint,
+                                    UVMap.001 = decals) and the scene tree, using the livery PNGs above (edit them,
+                                    Image > Reload in Blender); run tools/blender_decals.py in Blender after the
+                                    import to layer the decals on the paint. Export from Blender as glTF Binary
+                                    over this file: build imports the changed parts, decal UVs included (when both
+                                    the .glb and the .obj were edited, the .glb is used)
   DRIVERS/<id>/Helmet/*.png         helmet Colour and Specular (the paint; the shape is chosen in entities.json:
                                     helmet_model 0-2 = HELMETS/Helmet<n>, helmet_vent 0-5 = HELMETS/Vent<n>, -1 none)
   HELMETS/<shape>/<shape>.obj       with --models: the helmet shapes for Blender (in-car shells, vents and their
                                     low-detail versions, Garage_Helmet, Classic_<car>); build imports edited ones
-                                    (the rigid one-bone kind: in-car and garage helmets; not the classic heads)
+                                    (the rigid one-bone kind: in-car and garage helmets; not the classic heads);
+                                    <shape>.glb next to it, as the car's
   DRIVERS/<id>/ui/*.png             pre-race photo, driver select picture
   WHEELS/Alloys/*.png               wheel rims (colour _CA, normal _N, _Blurred_ for spinning wheels); a car names its
                                     rims in the database, several cars share some (Alloy_Default: Honda, MF1, Super
@@ -324,7 +331,7 @@ def cmd_template(usrdir, pack, models):
         raise SystemExit(f'{pack} already has a template; delete it first')
     ents = entities.export(entities.parse(game.get('offline.wad', 'entities.bin')))
     log(f'Database: {len(ents["drivers"])} drivers, {len(ents["teams"])} teams, {len(ents["cars"])} cars')
-    sources, models_written, team_roles = {}, {}, {}
+    sources, models_written, team_roles, gltf_jobs = {}, {}, {}, []
     for i, (team, model) in enumerate(TEAMS.items()):
         progress(i, len(TEAMS), f'reading the {team} car models')
         if game.get('offline.wad', f'Models/{model}/CarParts.sg') is None:
@@ -343,6 +350,9 @@ def cmd_template(usrdir, pack, models):
             sg.cmd_obj(game.scene("offline.wad", f"Models/{model}/CarParts.sg"), mdir / f'{team}.obj',
                        {'lod0'})
             models_written[f'CARS/{team}/model/{team}.obj'] = ['offline.wad', f'Models/{model}/CarParts.sg']
+            # the glTF (both UV sets) uses the livery PNGs themselves: written after them
+            gltf_jobs.append((('offline.wad', f'Models/{model}/CarParts.sg'), f'CARS/{team}/model/{team}.glb',
+                              {'lod0'}, pack / 'CARS' / team / 'livery'))
     progress(len(TEAMS), len(TEAMS), 'car models read')
     found = standalone_sources(game, ents)
     for rel, targets in found.items():
@@ -365,9 +375,18 @@ def cmd_template(usrdir, pack, models):
             (pack / rel).parent.mkdir(parents=True, exist_ok=True)
             sg.cmd_obj(game.scene(archive, path), pack / rel)
             models_written[rel] = [archive, path]
-    manifest = {'files': {}, 'built': [], 'teams': team_roles,
-                'models': {rel: {'sha1': sha1(pack / rel), 'target': t} for rel, t in models_written.items()}}
+            gltf_jobs.append(((archive, path), rel[:-4] + '.glb', None, None))
+    manifest = {'files': {}, 'built': [], 'teams': team_roles}
     write_images(pack, sources, game, manifest)
+    if gltf_jobs:
+        log('Exporting glTF models (both UV sets, for Blender)')
+    for (archive, path), rel, only, livery in gltf_jobs:
+        stem = lambda t: tex_stem(t.path)  # noqa: E731
+        car_png = (lambda t: livery / f'{stem(t)}.png' if t.path.replace('\\', '/').lower().startswith('textures/')
+                   and (livery / f'{stem(t)}.png').exists() else None) if livery else None
+        sg.cmd_gltf(game.scene(archive, path), pack / rel, only, texture_file=car_png)
+        models_written[rel] = [archive, path]
+    manifest['models'] = {rel: {'sha1': sha1(pack / rel), 'target': t} for rel, t in models_written.items()}
     for rel, info in manifest['files'].items():
         team = Path(rel).parts[1] if rel.startswith('CARS/') else None
         info['used_in'] = used_in(rel, info['targets'], team_roles.get(team))
@@ -460,20 +479,29 @@ def cmd_build(usrdir, pack):
                 sg_changes.setdefault((group, archive, path), []).append(
                     (key, sg.texture_from_file(src, orig, flip=True)))
         print(f'{rel}: changed')
-    imported = {}           # (group, archive, wad path) -> model with the edited OBJ geometry
-    for rel, info in manifest.get('models', {}).items():
+    imported = {}           # (group, archive, wad path) -> model with the edited OBJ / glTF geometry
+    # glTF first (it carries the decal UVs): an OBJ edited as well for the same model is ignored
+    for rel, info in sorted(manifest.get('models', {}).items(), key=lambda kv: not kv[0].endswith('.glb')):
         if not (pack / rel).exists() or sha1(pack / rel) == info['sha1']:
             continue
         print(f'{rel}: changed')
         group, (archive, path) = group_of(rel), info['target']
-        text = (pack / rel).read_text(encoding='utf-8', errors='replace')
+        if (group, archive, path) in imported:
+            print(f'  ignored: the .glb of this model was edited too and is used')
+            continue
+        if rel.endswith('.glb'):
+            src = (pack / rel).read_bytes()
+            load = lambda data, **kw: sg.import_gltf(data, src, base_dir=(pack / rel).parent, **kw)  # noqa: E731
+        else:
+            src = (pack / rel).read_text(encoding='utf-8', errors='replace')
+            load = lambda data, **kw: sg.import_obj(data, src, **kw)  # noqa: E731
         race, names = game.get(archive, path), []
-        imported[(group, archive, path)] = sg.import_obj(race, text, log=lambda m: print('  ' + m), changed=names)
+        imported[(group, archive, path)] = load(race, log=lambda m: print('  ' + m), changed=names)
         if path.endswith('/CarParts.sg') and names:
             # the garage model has the same lod0 parts: the same edits, placed by the race model's transforms
             for fe_archive, fe_path in garage_models(game, path.split('/')[1]):
-                fe = sg.import_obj(game.get(fe_archive, fe_path), text, log=lambda m: print(f'  {fe_path}: ' + m),
-                                   ref=race, only=set(names))
+                fe = load(game.get(fe_archive, fe_path), log=lambda m: print(f'  {fe_path}: ' + m),
+                          ref=race, only=set(names))
                 if fe != game.get(fe_archive, fe_path):
                     imported[(group, fe_archive, fe_path)] = fe
     for key in sorted(set(sg_changes) | set(imported)):
