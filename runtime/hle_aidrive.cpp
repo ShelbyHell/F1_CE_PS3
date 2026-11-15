@@ -16,6 +16,10 @@
 // F1CE_AI_DRIVE (launcher: Developer Tools, "AI drives the player's car"): set, F8 toggles AI control in a race
 // (either way); "key" = F8 only, a number s = also toggles once s seconds after the player first drives in each race
 // (0 = at once) and logs the car's speed every 2 s. Tested 2026-11-10: the car starts and races Silverstone in traffic.
+// F1CE_LAST_LAP=<s> (with a timed F1CE_AI_DRIVE): s seconds after the AI took the car, does what the cheat
+// goto_last_lap (0x1F4D44) does, once per race, to reach a race's end quickly (tests of results and points): the
+// cheat finds the human driver by +0x206 too (0 in a Quick Race: it passes NULL on and crashes), so this calls its
+// worker 0x1534DC(driver) with the driver found here.
 #include <bit>
 #include <cstdlib>
 #include <cstring>
@@ -24,6 +28,7 @@
 #include "kernel.h"
 
 void sub_001546D8(PPUContext& __restrict c);
+void sub_001534DC(PPUContext& __restrict c);
 
 namespace {
 // the human driver whose physics car is car, or 0
@@ -78,6 +83,21 @@ void ai_drive_update(PPUContext& c, u32 ctl, bool driving) {
         done = true;
         const u32 d = car ? find_driver(car) : 0;
         if (!d || !ld8(d + 0x224)) toggle(c, ctl, car, "F1CE_AI_DRIVE");   // (unless F8 already gave it to the AI)
+    }
+    static const char* last_lap = getenv("F1CE_LAST_LAP");
+    static bool last_lap_done = false;
+    if (!first_drive) last_lap_done = false;
+    if (last_lap && done && !last_lap_done && now - first_drive >= delay + (u64)(atof(last_lap) * 1e6)) {
+        last_lap_done = true;
+        const u32 d = car ? find_driver(car) : 0;
+        const u64 r3 = c.r[3], lr = c.lr;
+        const u32 fn = c.cur_fn;
+        c.r[3] = d;
+        if (d) sub_001534DC(c);
+        c.r[3] = r3;
+        c.lr = lr;
+        c.cur_fn = fn;
+        LOG_W("ai drive: goto_last_lap (F1CE_LAST_LAP)");
     }
     if (timed && now >= next_log && car) {
         next_log = now + 2000000;

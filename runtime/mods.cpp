@@ -1,5 +1,7 @@
 // Mod packs (season packs). F1CE_MOD_PACK=<name> selects MODS/<name>/ (F1CE_MODS_DIR overrides the MODS folder, the
-// launcher passes the one next to it); unset, nothing changes.
+// launcher passes the one next to it); unset, nothing changes. F1CE_HELMET_PACK=<name> adds PLAYER_HELMETS/<name>/
+// (F1CE_HELMETS_DIR overrides that folder) over the season pack: the player's own helmet designs, kept apart so
+// they go with every season pack. Both use the same layout.
 //
 // Inside a pack, folders before the first marker are free (the Content Manager's CARS/<team>/, DRIVERS/<driver>/,
 // ...); the marker says where the rest of the path points:
@@ -7,7 +9,8 @@
 //    archive, e.g. CARS/Ferrari/offline.wad/Models/Cars/Ferrari/Body.gtf; _unknown/<8 hex digits>.<ext> names an entry
 //    by its hash (entries whose path is not known yet);
 //  - a folder named USRDIR: the rest is a loose game file, e.g. USRDIR/tracks/monaco/environmentsettings.txt.
-// Files outside any marker (pack.ini, previews) are the manager's and ignored here.
+// Files outside any marker (pack.ini, previews) are the manager's and ignored here, except DATABASE/points.txt: the
+// season pack's points system (points_hook below).
 //
 // Archives (tools/wad.py has the format): the game reads the header, then count x 16-byte entries {hash, offset,
 // size, stored} (Wad ctor 0x4A8E4) and opens an entry by its name hash (0x4A4B8); stored == size means raw. A
@@ -21,6 +24,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <unordered_set>
 #include <vector>
 
 namespace stdfs = std::filesystem;
@@ -56,18 +60,19 @@ struct PackIndex {
     std::unordered_map<std::string, std::map<u32, stdfs::path>> wads;            // archive file name, lower
 };
 
-PackIndex build_index() {
-    PackIndex ix;
-    const char* pack = getenv("F1CE_MOD_PACK");
-    if (!pack || !*pack) return ix;
-    const char* dir = getenv("F1CE_MODS_DIR");
-    stdfs::path root = stdfs::u8path(dir && *dir ? dir : "MODS") / stdfs::u8path(pack);
+// adds the files of one pack folder; later packs replace the earlier ones' entries
+void add_pack(PackIndex& ix, const char* env_name, const char* env_dir, const char* def_dir) {
+    const char* pack = getenv(env_name);
+    if (!pack || !*pack) return;
+    const char* dir = getenv(env_dir);
+    stdfs::path root = stdfs::u8path(dir && *dir ? dir : def_dir) / stdfs::u8path(pack);
     std::error_code ec;
     if (!stdfs::is_directory(root, ec)) {
         LOG_W("mods: pack folder %s not found", PATH_STR(root).c_str());
-        return ix;
+        return;
     }
-    size_t n_wad = 0;
+    size_t n_wad = 0, n_loose = 0;
+    std::unordered_set<std::string> archives;
     for (auto it = stdfs::recursive_directory_iterator(root, ec); !ec && it != stdfs::recursive_directory_iterator();
          it.increment(ec)) {
         if (!it->is_regular_file(ec)) continue;
@@ -79,6 +84,7 @@ PackIndex build_index() {
             for (size_t j = i + 1; j < parts.size(); j++) rest += (rest.empty() ? "" : "/") + parts[j];
             if (m == "usrdir") {
                 ix.loose[lower(rest)] = PATH_STR(it->path());
+                n_loose++;
                 break;
             }
             if (m.size() > 4 && m.compare(m.size() - 4, 4, ".wad") == 0) {
@@ -88,13 +94,27 @@ PackIndex build_index() {
                                stem.find_first_not_of("0123456789abcdefABCDEF") == std::string::npos;
                 h = by_hash ? (u32)strtoul(stem.c_str(), nullptr, 16) : mods::name_hash(rest);
                 ix.wads[m][h] = it->path();
+                archives.insert(m);
                 n_wad++;
                 break;
             }
         }
     }
-    LOG_I("mods: pack \"%s\": %zu archive entries in %zu archives, %zu loose files", pack, n_wad, ix.wads.size(),
-          ix.loose.size());
+    LOG_I("mods: pack \"%s\": %zu archive entries in %zu archives, %zu loose files", pack, n_wad, archives.size(),
+          n_loose);
+}
+
+stdfs::path season_pack_root() {
+    const char* pack = getenv("F1CE_MOD_PACK");
+    if (!pack || !*pack) return {};
+    const char* dir = getenv("F1CE_MODS_DIR");
+    return stdfs::u8path(dir && *dir ? dir : "MODS") / stdfs::u8path(pack);
+}
+
+PackIndex build_index() {
+    PackIndex ix;
+    add_pack(ix, "F1CE_MOD_PACK", "F1CE_MODS_DIR", "MODS");
+    add_pack(ix, "F1CE_HELMET_PACK", "F1CE_HELMETS_DIR", "PLAYER_HELMETS");
     return ix;
 }
 
@@ -287,3 +307,62 @@ s64 wad_size(const std::string& host_path) {
 }
 
 }  // namespace mods
+
+// 0x1BFC14: points(u8 position, 0 = winner) -> r3; the game's table (0x1000461C) is 10 8 6 5 4 3 2 1 and only 8
+// places score (the limit is in the code). Every user goes through here: race results, standings, the "can still
+// win the title" check (races left x (points(0) + points(1))). DATABASE/points.txt of the season pack replaces it:
+// the points of 1st, 2nd, ... separated by spaces or commas, '#' starts a comment; up to 22 places.
+bool points_hook(PPUContext& c) {
+    static const std::vector<u32> table = [] {
+        std::vector<u32> t;
+        stdfs::path root = season_pack_root();
+        if (root.empty()) return t;
+        FILE* f = open_read(root / "DATABASE" / "points.txt");
+        if (!f) return t;
+        char line[512];
+        while (fgets(line, sizeof line, f)) {
+            if (char* h = strchr(line, '#')) *h = 0;
+            for (char* p = line; *p;) {
+                char* end;
+                long v = strtol(p, &end, 10);
+                if (end == p) { p++; continue; }
+                if (v >= 0 && t.size() < 22) t.push_back((u32)v);
+                p = end;
+            }
+        }
+        fclose(f);
+        std::string s;
+        for (u32 v : t) s += " " + std::to_string(v);
+        LOG_I("mods: points system from the season pack:%s", s.c_str());
+        return t;
+    }();
+    if (table.empty()) return false;
+    const u32 pos = (u32)c.r[3] & 0xFF;
+    c.r[3] = pos < table.size() ? table[pos] : 0;
+    static int logged = 0;
+    if (logged < 30) {
+        logged++;
+        LOG_I("mods: points(%u) = %u", pos, (u32)c.r[3]);
+    }
+    return true;
+}
+
+// probe at 0x4A528: Wad::open (0x4A4B8, r30 = the archive) is about to hash the entry name, r4 = {u32 length,
+// u32 string}. F1CE_WAD_NAMES=<file> appends every new name to that file (paths are only stored as hashes in the
+// archives: tools/wad_names.py merges these into tools/wad_names.txt).
+void wad_entry_name(PPUContext& c) {
+    static FILE* out = [] {
+        const char* p = getenv("F1CE_WAD_NAMES");
+        return p && *p ? fopen(p, "ab") : nullptr;
+    }();
+    if (!out) return;
+    const u32 len = (u32)(c.r[4] >> 32), ea = (u32)c.r[4];
+    if (!ea || !len || len > 512) return;
+    std::string name = gstr(ea, len);
+    static std::mutex m;
+    static std::unordered_set<std::string> seen;
+    std::lock_guard<std::mutex> lk(m);
+    if (!seen.insert(name).second) return;
+    fprintf(out, "%s\n", name.c_str());
+    fflush(out);
+}

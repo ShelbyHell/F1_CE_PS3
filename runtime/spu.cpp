@@ -591,7 +591,12 @@ void SPUThread::dma(u32 cmd) {
             const u32 prev_addr = res_addr, prev_gen = res_gen;
             SpinLock& l = atomic_lock(ea);
             for (;;) {
-                while (l.held.load(std::memory_order_acquire)) _mm_pause();
+                // (yields as SpinLock::lock does: with more busy threads than CPUs a preempted holder kept the
+                // waiters spinning for its whole time slice)
+                for (u32 n = 0; l.held.load(std::memory_order_acquire); n++) {
+                    _mm_pause();
+                    if (n >= 256) { std::this_thread::yield(); n = 0; }
+                }
                 u32 g = line_generation(ea);
                 std::atomic_thread_fence(std::memory_order_acquire);
                 memcpy(res_data, gmem(ea), 128);

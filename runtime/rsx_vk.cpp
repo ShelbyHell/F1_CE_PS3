@@ -69,7 +69,7 @@ namespace {
     X(vkCreateDescriptorPool) X(vkAllocateDescriptorSets) X(vkUpdateDescriptorSets) X(vkCreatePipelineLayout)        \
     X(vkCreateShaderModule) X(vkCreateGraphicsPipelines) X(vkCreateComputePipelines) X(vkCreatePipelineCache)        \
     X(vkGetPipelineCacheData) X(vkCreateQueryPool) X(vkGetQueryPoolResults) X(vkCmdResetQueryPool)                   \
-    X(vkCmdBeginQuery) X(vkCmdEndQuery) X(vkCmdBeginRendering) X(vkCmdEndRendering) X(vkCmdPipelineBarrier2)         \
+    X(vkCmdBeginQuery) X(vkCmdEndQuery) X(vkCmdWriteTimestamp2) X(vkCmdBeginRendering) X(vkCmdEndRendering) X(vkCmdPipelineBarrier2)         \
     X(vkCmdBindPipeline) X(vkCmdBindDescriptorSets) X(vkCmdBindIndexBuffer) X(vkCmdDrawIndexed) X(vkCmdDraw)         \
     X(vkCmdDispatch) X(vkCmdPushConstants) X(vkCmdClearAttachments) X(vkCmdClearColorImage)                          \
     X(vkCmdClearDepthStencilImage) X(vkCmdCopyBuffer) X(vkCmdCopyBufferToImage) X(vkCmdCopyImageToBuffer)            \
@@ -113,14 +113,15 @@ void check(VkResult r, const char* what) {
 
 // ------------------------------------------------------------------ submissions
 // Every command buffer pair has a serial; the timeline semaphore counts the finished ones.
-constexpr u32 SLOTS = 8, QUERIES = 4096;
+constexpr u32 SLOTS = 8, QUERIES = 4096, STAMPS = 512;
 struct Slot {
     VkCommandPool pool = 0;
     VkCommandBuffer cb = 0, ucb = 0;   // draws; uploads, which run first
-    VkQueryPool qpool = 0;
-    u32 qused = 0;
+    VkQueryPool qpool = 0, tpool = 0;   // occlusion; GPU timestamps (perf gpu: lines)
+    u32 qused = 0, tused = 0;
+    u64 tlabel[STAMPS];                 // what the GPU did from each timestamp to the next (gpu_mark)
     u64 qfirst = 0, serial = 0;        // id of its first query, serial it was submitted with
-    bool qread = true;
+    bool qread = true, tread = true;
 };
 Slot g_slots[SLOTS];
 u32 g_slot = 0;
@@ -128,6 +129,18 @@ VkSemaphore g_timeline;
 u64 g_serial = 1;      // of the command buffers being recorded
 u64 g_completed = 0;
 VkCommandBuffer g_cb, g_ucb;
+
+// GPU time (perf gpu: lines). A timestamp after all earlier commands at every render pass start and end; the time up to
+// the next one is charged to the label: a pass's target (offset, size, antialiased), GPU_UPLOADS (the upload command buffer,
+// which runs first) or GPU_OTHER (resolves, copies, clears and presentation between passes).
+constexpr u64 GPU_UPLOADS = 0, GPU_OTHER = 1;
+bool g_ts_ok = false;
+void gpu_mark(u64 label) {
+    Slot& s = g_slots[g_slot];
+    if (!g_ts_ok || s.tused + 1 >= STAMPS) return;   // (one kept for the end of the submission)
+    vkCmdWriteTimestamp2(g_cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, s.tpool, s.tused);
+    s.tlabel[s.tused++] = label;
+}
 
 u64 completed() {
     check(vkGetSemaphoreCounterValue(g_dev, g_timeline, &g_completed), "vkGetSemaphoreCounterValue");
@@ -461,16 +474,21 @@ u32 g_surf_epoch = 0;
 std::map<u32, u32> g_frame_targets;
 
 // the render pass being recorded
-struct Pass { bool on = false; VkImageView color = 0, depth = 0; Img* color_img = nullptr; Img* depth_img = nullptr; u32 w = 0, h = 0; VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT; } g_pass;
+struct Pass { bool on = false; VkImageView color = 0, depth = 0; Img* color_img = nullptr; Img* depth_img = nullptr; u32 w = 0, h = 0; VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT; u32 offset = 0; } g_pass;
+// why passes ended, per target (perf pass breaks: line): each end and new start of a render pass costs the GPU a drain
+// and, for depth, possibly a decompression
+std::map<std::pair<u32, const char*>, u32> g_pass_breaks;
 struct Queries { bool enabled = false, open = false; u64 id = 0; } g_q;
 void q_begin();
 void q_end();
 
-void end_pass() {
+void end_pass(const char* why = "other") {
     if (!g_pass.on) return;
+    g_pass_breaks[{g_pass.offset, why}]++;
     q_end();
     vkCmdEndRendering(g_cb);
     g_pass.on = false;
+    gpu_mark(GPU_OTHER);
     memory_barrier(g_cb);
 }
 
@@ -536,7 +554,7 @@ void ensure_ms(Surface* s) {
 // a pass with no draws: its end resolves the multisampled attachments
 bool resolve_ms(Surface& s) {
     if (!s.ms_color || !s.ms_dirty) return false;
-    end_pass();
+    end_pass("msaa resolve");
     VkRenderingAttachmentInfo c{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     c.imageView = s.ms_color->att;
     c.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -579,7 +597,7 @@ void resolve_all_ms() {
 }
 // before an image is read as a texture: what the open pass wrote must be finished
 void sampled(Img* im) {
-    if (g_pass.on && (g_pass.color_img == im || g_pass.depth_img == im)) end_pass();
+    if (g_pass.on && (g_pass.color_img == im || g_pass.depth_img == im)) end_pass(g_pass.color_img == im ? "colour sampled" : "depth sampled");
 }
 
 DepthSurface* get_depth(u32 offset, u32 w, u32 h) {
@@ -657,7 +675,7 @@ void write_back_pending(Surface* s) {
 }
 void write_back_start(Surface* s) {
     if (!s->wb_dirty || s->wb_pending) return;
-    end_pass();
+    end_pass("write back");
     if (!s->wb_buf.buf) s->wb_buf = make_buffer((VkDeviceSize)s->width * s->height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true, false);
     VkBufferImageCopy c{};
     c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -737,7 +755,7 @@ void begin_pass(Surface* s) {
     const u32 pw = scaled(s->width, s->scale_x), ph = scaled(s->height, s->scale_y);
     if (!d) d = null_depth(pw, ph);
     if (g_pass.on && g_pass.color == c->att && g_pass.depth == d->att && g_pass.w == pw && g_pass.h == ph) return;
-    end_pass();
+    end_pass(!g_pass.on ? "" : g_pass.color != c->att ? "target change" : g_pass.depth != d->att ? "depth change" : "size change");
     VkRenderingAttachmentInfo ca{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     ca.imageView = c->att;
     ca.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -752,11 +770,13 @@ void begin_pass(Surface* s) {
     ri.pColorAttachments = &ca;
     ri.pDepthAttachment = &da;
     ri.pStencilAttachment = &da;
+    gpu_mark((u64)s->offset << 32 | (u64)(pw & 0x3FFF) << 18 | (u64)(ph & 0x3FFF) << 4 | (s->ms_active ? 2 : 0));
     vkCmdBeginRendering(g_cb, &ri);
     g_pass.on = true;
     g_pass.color = c->att; g_pass.depth = d->att; g_pass.w = pw; g_pass.h = ph;
     g_pass.color_img = s->tex;
     g_pass.depth_img = s->attached_depth;
+    g_pass.offset = s->offset;
     q_begin();
 }
 
@@ -926,6 +946,7 @@ void start_workers() {
     if (const char* e = getenv("F1CE_COMPILE_THREADS")) n = std::clamp(atoi(e), 1, 32);
     LOG_I("rsx: %d pipeline threads", n);
     for (int i = 0; i < n; i++) std::thread([] {
+        lower_thread_priority(10);
         for (;;) {
             std::function<void()> job;
             {
@@ -1323,7 +1344,7 @@ Img* cube_texture(u32 u) {
         auto it = g_surfaces.find(offset + f * face_bytes);
         if (it == g_surfaces.end() || !it->second.tex || it->second.width != w || it->second.height != w) continue;
         if (it->second.write_seq == ce.seq[f]) continue;
-        end_pass();
+        end_pass("cube copy");
         const s32 fw = (s32)(scaled(it->second.width, it->second.scale_x)), fh = (s32)(scaled(it->second.height, it->second.scale_y));
         VkImageBlit b{};
         b.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -1616,7 +1637,9 @@ void draw(bool indexed) {
             um.t = t; um.surf = from_surface; um.dfunc = depth_func;
             um.slot = t ? (int)tex_slot(t, unit_sampler(u, from_surface, is_depth(t->fmt))) : 0;
         }
-        if (t && from_surface) sampled(t);
+        // (only for a program that reads the unit: the game leaves the shadow map's depth bound while it draws into that
+        // map, which ended the render pass before nearly every shadow draw, ~120-240 times a frame)
+        if (t && from_surface && (p->tex_used >> u & 1)) sampled(t);
         dp.slot[u] = stale_slot[u] = um.slot;
         dp.tex_flip[u] = from_surface ? 1.0f : 0.0f;
         if (from_surface && depth_func == 0 && !(conv & 0xF) && (p->tex_used >> u & 1)) {
@@ -1821,10 +1844,62 @@ void zpass_resolve() {
 }
 
 // ------------------------------------------------------------------ command buffers
+// GPU busy time: each submission's span from its first command to its last, overlaps with the previous one left out.
+// Slots are read back in submission order (begin_slot), 8 submissions late.
+u64 g_gpu_busy_ns = 0, g_gpu_max_ns = 0, g_gpu_last_end = 0;
+struct GpuPass { u64 ns = 0, n = 0; };
+std::unordered_map<u64, GpuPass> g_gpu_passes;
+std::string gpu_label(u64 k) {
+    if (k == GPU_UPLOADS) return "uploads";
+    if (k == GPU_OTHER) return "between passes";
+    char b[48];
+    snprintf(b, sizeof(b), "%08x %ux%u%s", (u32)(k >> 32), (u32)(k >> 18 & 0x3FFF), (u32)(k >> 4 & 0x3FFF), k & 2 ? " msaa" : "");
+    return b;
+}
+// the labels with the most GPU time, as "label ms (passes)" divided by div
+std::string gpu_top(const std::unordered_map<u64, GpuPass>& m, double div, size_t n) {
+    std::vector<std::pair<u64, GpuPass>> v(m.begin(), m.end());
+    std::sort(v.begin(), v.end(), [](auto& a, auto& b) { return a.second.ns > b.second.ns; });
+    std::string r;
+    char b[96];
+    for (size_t i = 0; i < v.size() && i < n; i++) {
+        snprintf(b, sizeof(b), "%s %s %.1f ms (%.1f)", i ? "," : "", gpu_label(v[i].first).c_str(), v[i].second.ns / div / 1e6, v[i].second.n / div);
+        r += b;
+    }
+    return r;
+}
+void slot_read_timestamps(Slot& s) {
+    if (s.tread) return;
+    s.tread = true;
+    u64 t[STAMPS];
+    if (s.tused < 2 || vkGetQueryPoolResults(g_dev, s.tpool, 0, s.tused, s.tused * 8, t, 8, VK_QUERY_RESULT_64_BIT) != VK_SUCCESS) return;
+    const u32 n = s.tused;
+    if (t[n - 1] < t[0]) return;
+    const double period = g_props.limits.timestampPeriod;
+    const u64 start = std::max(t[0], g_gpu_last_end), span = (u64)((t[n - 1] - t[0]) * period);
+    if (t[n - 1] > start) g_gpu_busy_ns += (u64)((t[n - 1] - start) * period);
+    g_gpu_max_ns = std::max(g_gpu_max_ns, span);
+    g_gpu_last_end = std::max(g_gpu_last_end, t[n - 1]);
+    std::unordered_map<u64, GpuPass> sub;
+    for (u32 i = 0; i + 1 < n; i++) {
+        const u64 d = t[i + 1] > t[i] ? (u64)((t[i + 1] - t[i]) * period) : 0;
+        GpuPass& p = sub[s.tlabel[i]];
+        p.ns += d;
+        p.n++;
+    }
+    for (auto& [k, p] : sub) { g_gpu_passes[k].ns += p.ns; g_gpu_passes[k].n += p.n; }
+    static int slow_logged = 0;
+    if (span > 40000000 && slow_logged < 100) {   // a frame's worth of GPU work that took over 40 ms: what it was
+        slow_logged++;
+        LOG_I("gpu slow submission: %.1f ms |%s", span / 1e6, gpu_top(sub, 1, 6).c_str());
+    }
+}
+
 void begin_slot() {
     Slot& s = g_slots[g_slot];
     if (s.serial) wait_serial(s.serial);
     slot_read_queries(s);
+    slot_read_timestamps(s);
     s.serial = 0;   // (recording: zpass_resolve must not read its queries)
     check(vkResetCommandPool(g_dev, s.pool, 0), "vkResetCommandPool");
     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
@@ -1834,6 +1909,14 @@ void begin_slot() {
     g_cb = s.cb;
     g_ucb = s.ucb;
     vkCmdResetQueryPool(s.ucb, s.qpool, 0, QUERIES);
+    s.tused = 0;
+    if (g_ts_ok) {   // uploads from here to the first timestamp of the draw command buffer
+        vkCmdResetQueryPool(s.ucb, s.tpool, 0, STAMPS);
+        vkCmdWriteTimestamp2(s.ucb, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, s.tpool, 0);
+        s.tlabel[0] = GPU_UPLOADS;
+        s.tused = 1;
+        gpu_mark(GPU_OTHER);
+    }
     s.qused = 0;
     s.qread = false;
     g_dyn.valid = false;
@@ -1842,9 +1925,10 @@ void begin_slot() {
 }
 
 void submit(VkSemaphore wait, VkSemaphore signal) {
-    end_pass();
+    end_pass("submit");
     Slot& s = g_slots[g_slot];
     memory_barrier(s.ucb);
+    if (g_ts_ok) { vkCmdWriteTimestamp2(s.cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, s.tpool, s.tused++); s.tread = false; }
     check(vkEndCommandBuffer(s.ucb), "vkEndCommandBuffer");
     check(vkEndCommandBuffer(s.cb), "vkEndCommandBuffer");
     VkCommandBufferSubmitInfo cbs[2]{{VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO}, {VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO}};
@@ -2266,6 +2350,7 @@ void create_device() {
         if (pres && (qf[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) && (qf[i].queueFlags & VK_QUEUE_COMPUTE_BIT)) { g_qfam = i; found = true; }
     }
     if (!found) fatal("no queue that draws and presents");
+    g_ts_ok = qf[g_qfam].timestampValidBits >= 64 && g_props.limits.timestampPeriod > 0;
 
     // features
     VkPhysicalDeviceExtendedDynamicState3FeaturesEXT eds3{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_3_FEATURES_EXT};
@@ -2365,6 +2450,11 @@ void create_objects() {
         qi.queryType = VK_QUERY_TYPE_OCCLUSION;
         qi.queryCount = QUERIES;
         check(vkCreateQueryPool(g_dev, &qi, nullptr, &s.qpool), "vkCreateQueryPool");
+        if (g_ts_ok) {
+            qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            qi.queryCount = STAMPS;
+            check(vkCreateQueryPool(g_dev, &qi, nullptr, &s.tpool), "vkCreateQueryPool");
+        }
     }
 
     // rings and heaps
@@ -2570,7 +2660,7 @@ void method_2d(u32 sub, u32 mm, u32 arg) {
     Surface* d = dit != g_surfaces.end() && dit->second.tex ? &dit->second : get_surface(dst, w, h, s.format);
     u32 cw = std::min(w, d->width), ch = std::min(h, d->height);
     resolve_ms(s);
-    end_pass();
+    end_pass("surface copy");
     VkImageBlit b{};
     b.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     b.srcOffsets[1] = {(s32)(scaled(cw, s.scale_x)), (s32)(scaled(ch, s.scale_y)), 1};
@@ -2676,7 +2766,7 @@ void flip(u32 ea, u32 pitch, u32 width, u32 height) {
     vk_init_once();
     (void)pitch; (void)width; (void)height;
     resolve_all_ms();
-    end_pass();
+    end_pass("flip");
     static u64 start_us = 0;
     if (!start_us) start_us = time_usec();
     g_frame_targets.clear();
@@ -2728,7 +2818,7 @@ void flip(u32 ea, u32 pitch, u32 width, u32 height) {
     static u64 flip_serial[2] = {};   // at most two frames in flight
     wait_serial(flip_serial[1]);
     tp[4] = time_usec();
-    if (tp[4] - g_flip_t0 > 10000 && tp[3]) {   // debug: where a slow flip went
+    if (tp[4] - g_flip_t0 > 25000 && tp[3]) {   // debug: where a slow flip went (not a vsync wait of up to one refresh)
         static int n = 0;
         if (n++ < 200)
             LOG_I("rsx flip slow: %.1f ms | before %.1f heaps %.1f acquire %.1f submit %.1f present %.1f wait %.1f", (tp[4] - g_flip_t0) / 1e3,
@@ -2760,6 +2850,26 @@ void flip(u32 ea, u32 pitch, u32 width, u32 height) {
             LOG_I("perf front: ms draw calls %.2f (attributes %.2f params+pass %.2f) clears %.2f flip %.2f semaphore waits %.2f | %.0f commands %.0f words, %.0f slow entries (%.0f nops %.0f flow)",
                   g_fe.t_draw / nf / 1e3, g_prof.t_pre / nf / 1e3, g_prof.t_bind / nf / 1e3, g_fe.t_clear / nf / 1e3, g_fe.t_flip / nf / 1e3,
                   g_fe.t_sem / nf / 1e3, g_fe.cmds / nf, g_fe.words / nf, g_fe.entries / nf, g_fe.nops / nf, g_fe.flows / nf);
+            if (g_ts_ok) {   // near 100% busy: the GPU sets the frame rate
+                LOG_I("perf gpu: busy %.1f ms per frame (%.0f%% of the time), longest submission %.1f ms", g_gpu_busy_ns / nf / 1e6,
+                      g_gpu_busy_ns / 10.0 / wall, g_gpu_max_ns / 1e6);
+                LOG_I("perf gpu passes (ms and passes per frame):%s", gpu_top(g_gpu_passes, nf, 8).c_str());
+            }
+            {
+                std::vector<std::pair<u32, std::pair<u32, const char*>>> v;
+                for (auto& [k, n] : g_pass_breaks) v.push_back({n, k});
+                std::sort(v.begin(), v.end(), [](auto& a, auto& b) { return a.first > b.first; });
+                std::string l;
+                char b[96];
+                for (size_t i = 0; i < v.size() && i < 8; i++) {
+                    snprintf(b, sizeof(b), "%s %08x %s %.1f", i ? "," : "", v[i].second.first, v[i].second.second, v[i].first / nf);
+                    l += b;
+                }
+                LOG_I("perf pass breaks per frame (target, why):%s", l.c_str());
+                g_pass_breaks.clear();
+            }
+            g_gpu_busy_ns = g_gpu_max_ns = 0;
+            g_gpu_passes.clear();
             g_fe = {};
             g_prof = {};
             window_start = now;

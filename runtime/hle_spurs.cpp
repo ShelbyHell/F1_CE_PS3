@@ -301,6 +301,7 @@ static void check_long_runs() {
 void spu_worker(u32 num) {
     set_thread_name(("spu w" + std::to_string(num)).c_str());
     place_thread(2);
+    lower_thread_priority(5);
     if (!getenv("F1CE_HOST_PROFILE_RSX")) profile_register_thread();
     auto spu = std::make_unique<SPUThread>();
     spu->id = num;

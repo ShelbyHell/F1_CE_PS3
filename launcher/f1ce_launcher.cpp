@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <list>
 #include <string>
 #include <vector>
 
@@ -124,6 +125,8 @@ Combo g_combos[] = {
       {L"Español", L"spanish"}, {L"Português", L"portuguese"}, {L"Suomi", L"finnish"}}, 0, GAME},
     // the folders of MODS next to the launcher, added at start (add_season_packs; runtime/mods.cpp)
     {L"Season pack (MODS folder)", L"F1CE_MOD_PACK", {{L"None (original game)", nullptr}}, 0, GAME},
+    // the folders of PLAYER_HELMETS next to the launcher: the profile's helmet designs, over any season pack
+    {L"Player helmets", L"F1CE_HELMET_PACK", {{L"Original", nullptr}}, 0, GAME},
     // Quick Race Settings (runtime/hle_quickrace.cpp): "Game menu" leaves the variable unset
     {L"Circuit", L"F1CE_QR_TRACK",
      {{L"Game menu", nullptr}, {L"Bahrain (Sakhir)", L"bahrain"}, {L"Malaysia (Sepang)", L"malaysia"},
@@ -290,17 +293,19 @@ std::wstring window_text(HWND h) {
 bool checked(const Check& c) { return SendMessageW(c.h, BM_GETCHECK, 0, 0) == BST_CHECKED; }
 
 std::wstring mods_dir() { return g_exe_dir + L"\\MODS"; }
+std::wstring helmets_dir() { return g_exe_dir + L"\\PLAYER_HELMETS"; }
 
-// one choice per folder of MODS: the folder name is the pack's name and the variable's value
-void add_season_packs() {
-    static std::vector<std::wstring> names;   // (the choices point into it)
+// one choice per folder of dir: the folder name is the pack's name and the variable's value
+void add_packs(const wchar_t* env, const std::wstring& dir) {
+    static std::list<std::vector<std::wstring>> lists;   // (the choices point into these)
+    std::vector<std::wstring>& names = lists.emplace_back();
     namespace fs = std::filesystem;
     std::error_code ec;
-    for (const auto& e : fs::directory_iterator(fs::path(mods_dir()), ec))
+    for (const auto& e : fs::directory_iterator(fs::path(dir), ec))
         if (e.is_directory(ec) && e.path().filename().wstring()[0] != L'.') names.push_back(e.path().filename().wstring());
     std::sort(names.begin(), names.end());
     for (Combo& c : g_combos)
-        if (!wcscmp(c.env, L"F1CE_MOD_PACK"))
+        if (!wcscmp(c.env, env))
             for (const std::wstring& n : names) c.choices.push_back({n.c_str(), n.c_str()});
 }
 
@@ -535,6 +540,7 @@ void start_game() {
     for (Combo& c : g_combos)
         if (wcscmp(c.env, PRESET_KEY)) SetEnvironmentVariableW(c.env, selected_value(c));
     SetEnvironmentVariableW(L"F1CE_MODS_DIR", mods_dir().c_str());
+    SetEnvironmentVariableW(L"F1CE_HELMETS_DIR", helmets_dir().c_str());
     for (Check& c : g_checks) {
         if (c.env[0] == L'-') { if (checked(c)) cmd += L" " + std::wstring(c.env); continue; }
         SetEnvironmentVariableW(c.env, checked(c) ? c.value : nullptr);
@@ -968,7 +974,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
             fs::copy(old, data, fs::copy_options::recursive, ec);
     }
     g_ini = g_exe_dir + L"\\f1ce_launcher.ini";
-    add_season_packs();
+    add_packs(L"F1CE_MOD_PACK", mods_dir());
+    add_packs(L"F1CE_HELMET_PACK", helmets_dir());
     add_gpus();
 
     NONCLIENTMETRICSW ncm{};
