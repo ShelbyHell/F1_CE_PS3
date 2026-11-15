@@ -257,6 +257,11 @@ def main():
         for name in sorted(os.listdir(wheels)):
             if name.endswith(".ini"):
                 add(root, "usr/share/f1ce-recomp/wheels/" + name, open(os.path.join(wheels, name), "rb").read(), 0o644)
+        envs = os.path.join(top, "launcher", "environments")   # example environment presets, seeded by AppRun
+        for d, _, files in sorted(os.walk(envs)):
+            for name in sorted(files):
+                rel = os.path.relpath(os.path.join(d, name), envs).replace(os.sep, "/")
+                add(root, "usr/share/f1ce-recomp/ENVIRONMENTS/" + rel, open(os.path.join(d, name), "rb").read(), 0o644)
         print(f"launcher: {args.launcher}")
     else:
         print(f"no launcher at {args.launcher}: AppRun will start the game directly")

@@ -241,6 +241,10 @@ if [ "$direct" = 0 ]; then
     for f in "$HERE/usr/share/f1ce-recomp/wheels/"*.ini; do   # built-in profiles; the player's edits are kept
         [ -f "$f" ] && [ ! -f "$DATA_DIR/wheels/${f##*/}" ] && cp "$f" "$DATA_DIR/wheels/"
     done
+    # example environment presets and their README; the player's edits are kept
+    (cd "$HERE/usr/share/f1ce-recomp" 2>/dev/null && find ENVIRONMENTS -type f 2>/dev/null) | while read -r f; do
+        [ -f "$DATA_DIR/$f" ] || { mkdir -p "$DATA_DIR/${f%/*}"; cp "$HERE/usr/share/f1ce-recomp/$f" "$DATA_DIR/$f"; }
+    done
     [ -f "$INI" ] || seed_ini
     load_conf   # (variables the launcher has no option for still reach the game)
     unset F1CE_GAME_DIR F1CE_DIRECT

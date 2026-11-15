@@ -68,9 +68,19 @@ struct FlowRec { u32 ms, get, cmd, put, ref; };
 FlowRec g_flow_hist[48];
 u32 g_flow_pos = 0;
 u32 g_cur_get = 0;
+// recent list copies made by the watcher: (time ms, range, slot reference, front end position and reference then)
+struct SnapRec { u32 ms, lo, hi, ref, front_get, front_ref, put; };
+SnapRec g_snap_hist[8];
+std::atomic<u32> g_snap_hist_pos{0};
+extern u32 g_front_ref;
 
 u32 io_to_ea(u32 io);
 void dump_history() {
+    for (u32 i = 0, p = g_snap_hist_pos.load(); i < 8; i++) {
+        const SnapRec& r = g_snap_hist[(p + i) % 8];
+        if (r.hi) LOG_E("  list copy t=%u ms %08x..%08x ref=%08x (front end then at %08x ref %08x, put %08x)", r.ms, r.lo, r.hi, r.ref,
+                        r.front_get, r.front_ref, r.put);
+    }
     for (u32 i = 0; i < 48; i++) {
         const FlowRec& r = g_flow_hist[(g_flow_pos + i) % 48];
         if (r.cmd) LOG_E("  flow t=%u ms @%08x %08x put=%08x ref=%08x", r.ms, r.get, r.cmd, r.put, r.ref);
@@ -534,13 +544,38 @@ void snap_watcher() {
         // sees PUT at a later slot or an old PUT inside the list: the copy then ended short of the closing jump and
         // lived one frame too long, and a later frame's list ran into its old words at a misaligned address (FIFO
         // fault late in a race: vertex program microcode decoded as a CALL). Closing jump not found: no copy.
+        // The first jump into a ring slot after the old PUT is this list's end. When it goes to another slot than PUT's,
+        // PUT moved through a whole frame between two polls (60 fps: a frame is shorter than the allowed gap), and a
+        // match further on is an old list's end left in memory: such a copy carried the next frame's reference, so it
+        // never went stale and the front end ran the old tail two frames later (stale jump to a slot, FIFO fault).
+        static u64 st_made = 0, st_skipped = 0, st_late = 0, st_window = 0;
         u32 closing = 0;
-        if (put != prev && prev && (prev & 0xFFF) != 0x060 && (put & 0xFFF) == 0x060 && poll_gap < 30000) {
+        // (PUT at slot + 0x60 inside a list, not at a ring slot: no SET_REFERENCE at the page start, nothing to copy)
+        auto is_slot = [](u32 io) { u32 p = g.io_map[(io >> 20) & 4095]; return p != 0xFFFFFFFF && ld32(p + (io & 0xFFFFF)) == 0x00040050; };
+        if (put != prev && prev && (prev & 0xFFF) != 0x060 && (put & 0xFFF) == 0x060 && poll_gap < 30000 && is_slot(put & ~0xFFFu)) {
             const u32 want = 0x20000000 | (put & ~0xFFFu);
+            if (poll_gap > 10000) st_late++;
             for (u32 a = prev & ~3u, end = a + 0x200000; a < end; a += 4) {
                 u32 page = g.io_map[(a >> 20) & 4095];
                 if (page == 0xFFFFFFFF) break;
-                if (ld32(page + (a & 0xFFFFF)) == want) { closing = a; break; }
+                u32 w = ld32(page + (a & 0xFFFFF));
+                if (w == want) { closing = a; break; }
+                if ((w & 0xE0000FFF) == 0x20000000 && w != 0x20000000) {   // old jump to a page start: a ring slot?
+                    if (is_slot(w & 0x1FFFFFFC)) {
+                        u32 t = w & 0x1FFFFFFC;
+                        st_skipped++;
+                        static u32 n = 0;
+                        if (n++ < 50) {
+                            u32 old_match = 0;   // (where the search used to stop)
+                            for (u32 b = a + 4; b < end && g.io_map[(b >> 20) & 4095] != 0xFFFFFFFF; b += 4)
+                                if (ld32(g.io_map[(b >> 20) & 4095] + (b & 0xFFFFF)) == want) { old_match = b; break; }
+                            LOG_W("RSX: streamed list at %08x not copied: it closes into slot %08x at %08x, PUT is already at %08x (poll gap %llu us; "
+                                  "an old jump to that slot at %08x)",
+                                  prev, t, a, put, (unsigned long long)poll_gap, old_match);
+                        }
+                        break;
+                    }
+                }
             }
             if (!closing) {
                 static u32 n = 0;
@@ -582,11 +617,21 @@ void snap_watcher() {
                     g_snap_count = (u32)g_snaps.size();
                 }
                 g_snap_gen++;
+                g_snap_hist[g_snap_hist_pos++ % 8] = {(u32)(time_usec() / 1000), lo, hi, sn->ref, get, g_front_ref, put};
+                st_made++;
                 static u32 n = 0;
                 if (n++ < 20) LOG_I("RSX: streamed list %08x..%08x copied (front end at %08x)", lo, hi, get);
             }
         }
         prev = put;
+        if (!st_window) st_window = poll_t;
+        if (poll_t - st_window > 5000000) {
+            if (st_made || st_skipped || st_late)
+                LOG_I("RSX list copies: %llu made, %llu refused (list closes into an earlier slot), %llu polls over 10 ms at a list end in 5 s",
+                      (unsigned long long)st_made, (unsigned long long)st_skipped, (unsigned long long)st_late);
+            st_made = st_skipped = st_late = 0;
+            st_window = poll_t;
+        }
     }
 }
 
@@ -824,6 +869,37 @@ void rsx_thread() {
                 if (ld32(io_to_ea(tgt)) == 0 && ld32(g.control_addr) != tgt)
                     LOG_W("RSX: flow word %08x @%08x: target still empty after %llu us (put %08x, list copies %u)", cmd, get,
                           (unsigned long long)waited, ld32(g.control_addr), g_snap_count.load());
+            }
+        }
+        // A frame list closes with a jump to the next ring slot, whose SET_REFERENCE is the next frame's (one step of
+        // 2 up). A closing jump into a slot that would move the reference back is the old end of a list from two
+        // frames before: the front end then re-ran a slot and followed its old jump into a list the game was
+        // rewriting (FIFO fault in a 60 fps race on Vulkan, user log). Re-read the word: from guest memory once the
+        // copies are dropped, else wait for the game's word.
+        if (((cmd & 0xE0000003) == 0x20000000 || (cmd & 3) == 1) && (get & 0xFFF) != 0x060) {
+            u32 tgt = (cmd & 0xE0000003) == 0x20000000 ? (cmd & 0x1FFFFFFC) : (cmd & 0xFFFFFFFC);
+            if ((tgt & 0xFFF) == 0 && fifo_peek(tgt) == 0x00040050) {
+                u32 slot_ref = fifo_peek(tgt + 4);
+                if (g_front_ref && (u32)(g_front_ref - slot_ref) < 64) {
+                    flush_pending();
+                    const bool from_copy = g_cur_snap != nullptr;
+                    u32 guest = ld32(io_to_ea(get));
+                    static u32 n = 0;
+                    if (n++ < 50)
+                        LOG_W("RSX: closing jump %08x @%08x into slot %08x with old reference %x (front ref %x, put %08x) read from %s %08x..%08x "
+                              "(copy ref %x), memory has %08x",
+                              cmd, get, tgt, slot_ref, g_front_ref, put, from_copy ? "a list copy" : "guest memory",
+                              from_copy ? g_cur_snap->lo : 0, from_copy ? g_cur_snap->hi : 0, from_copy ? g_cur_snap->ref : 0, guest);
+                    if (from_copy || guest != cmd) {
+                        snaps_drop_all();
+                        continue;
+                    }
+                    u64 start = time_usec();
+                    while (ld32(io_to_ea(get)) == cmd && time_usec() - start < 1000000) std::this_thread::yield();
+                    u32 now_word = ld32(io_to_ea(get));
+                    if (n < 50) LOG_W("RSX: ... memory word %08x after %llu us", now_word, (unsigned long long)(time_usec() - start));
+                    if (now_word != cmd) continue;
+                }
             }
         }
         if ((cmd & 3) || (cmd & 0xE0000003) == 0x20000000 || cmd == 0x00020000) {

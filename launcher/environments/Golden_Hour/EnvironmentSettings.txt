@@ -1,0 +1,4 @@
+"Lights.Sun Colour"=8.0 5.6 3.2
+"Lights.Ambient Colour"=2.0 1.9 2.4
+"Atmospherics.Fog Colour"=1.6 1.2 0.9
+"Atmospherics.Fog density"=0.0006

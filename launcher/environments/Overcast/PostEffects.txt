@@ -1,0 +1,2 @@
+"Bloom.Colour Scale"=0.08
+"Picture.Saturation"=0.8

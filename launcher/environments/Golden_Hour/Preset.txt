@@ -1,0 +1,2 @@
+// late afternoon: the Time Trial sky and sun angle, warmer and brighter than the original sunset
+Base=sunset

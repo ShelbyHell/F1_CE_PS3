@@ -8,6 +8,9 @@
 
 namespace stdfs = std::filesystem;
 
+// hle_environment.cpp: a track settings file merged with the launcher's environment preset, or empty
+std::string environment_override(const std::string& host, const std::string& src);
+
 namespace {
 enum : s32 {
     O_WRONLY = 1, O_RDWR = 2, O_ACCMODE = 3, O_CREAT = 0x40, O_EXCL = 0x80, O_TRUNC = 0x200, O_APPEND = 0x400,
@@ -91,6 +94,8 @@ s32 open(const std::string& path, s32 flags, u32 fd_out) {
     int acc = flags & O_ACCMODE;
     if (acc == 0 && exists) {
         std::string repl = mods::loose_override(host);
+        std::string env = environment_override(host, repl.empty() ? host : repl);
+        if (!env.empty()) repl = env;
         if (!repl.empty()) {
             host = repl;
             hp = stdfs::u8path(host);
@@ -187,6 +192,8 @@ s32 stat(const std::string& path, u32 out) {
     bool dir = stdfs::is_directory(hp, ec);
     if (!dir) {
         std::string repl = mods::loose_override(host);
+        std::string env = environment_override(host, repl.empty() ? host : repl);
+        if (!env.empty()) repl = env;
         if (!repl.empty()) hp = stdfs::u8path(host = repl);
         if (s64 vs = mods::wad_size(host); vs >= 0) {
             write_stat(out, false, (u64)vs);

@@ -84,6 +84,14 @@ std::vector<Option> make_options() {
                        {{"On", nullptr}, {"On, tune with the numpad", "tune"}, {"Off (original camera)", "0"}}, 0,
                        "The second TV pod view of the camera cycle as a broadcast T-cam. Off: the game's own TV pod "
                        "offset camera. Tune: the numpad moves it, values on the console, saved in tvcam_tune.ini."));
+    v.push_back(choice(GENERAL, "Race environment", "F1CE_RACE_ENV",
+                       {{"Early afternoon (original)", nullptr}, {"Sunset", "sunset"}}, 0,
+                       "The light of races, Grands Prix and practice: sun, sky, fog and post effects. The folders of "
+                       "ENVIRONMENTS next to the launcher are your own presets (see ENVIRONMENTS/README.txt)."));
+    v.push_back(choice(GENERAL, "Time Trial environment", "F1CE_TT_ENV",
+                       {{"Sunset (original)", nullptr}, {"Early afternoon", "afternoon"}}, 0,
+                       "The light of Time Trial and tests. The folders of ENVIRONMENTS next to the launcher are your "
+                       "own presets (see ENVIRONMENTS/README.txt)."));
     v.push_back(choice(GAMEPAD, "Chase cam look-around", "F1CE_CAM_ORBIT", {{"On", nullptr}, {"Off", "0"}}, 0,
                        "The right stick turns the chase cameras around the car."));
     v.push_back(choice(GENERAL, "Language", "F1CE_LANGUAGE",
@@ -511,6 +519,8 @@ void init(const std::string& exe_dir) {
     }
     add_packs("F1CE_MOD_PACK", "MODS");
     add_packs("F1CE_HELMET_PACK", "PLAYER_HELMETS");
+    add_packs("F1CE_RACE_ENV", "ENVIRONMENTS");
+    add_packs("F1CE_TT_ENV", "ENVIRONMENTS");
     add_gpus();
 }
 const std::string& exe_dir() { return g_exe_dir; }
@@ -628,6 +638,7 @@ std::string start_game(Ini& ini, std::function<void(unsigned)> exited) {
     }
     set_env("F1CE_MODS_DIR", S(P(g_data_dir) / "MODS").c_str());
     set_env("F1CE_HELMETS_DIR", S(P(g_data_dir) / "PLAYER_HELMETS").c_str());
+    set_env("F1CE_ENV_DIR", S(P(g_data_dir) / "ENVIRONMENTS").c_str());
     {   // extra: NAME=value tokens
         const std::string extra = (g_dev_mode ? find("extra")->text : std::string()) + " ";
         size_t s = 0;

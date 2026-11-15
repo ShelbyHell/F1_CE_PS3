@@ -1,0 +1,2 @@
+// grey midday: weak sun, bright flat sky light, haze, muted colours
+Base=afternoon

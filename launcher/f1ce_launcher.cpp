@@ -118,6 +118,11 @@ Combo g_combos[] = {
      L"Tune: the numpad moves it, the values show on the console and are saved in tvcam_tune.ini."},
     {L"Chase cam look-around", L"F1CE_CAM_ORBIT", {{L"On", nullptr}, {L"Off", L"0"}}, 0, GAME,
      L"The right stick turns the chase cameras around the car."},
+    // lighting of the track by session type, or a preset folder of ENVIRONMENTS (add_packs; runtime/hle_environment.cpp)
+    {L"Race environment", L"F1CE_RACE_ENV", {{L"Early afternoon (original)", nullptr}, {L"Sunset", L"sunset"}}, 0,
+     GAME, L"The light of races, Grands Prix and practice. The folders of ENVIRONMENTS are your own presets."},
+    {L"Time Trial environment", L"F1CE_TT_ENV", {{L"Sunset (original)", nullptr}, {L"Early afternoon", L"afternoon"}},
+     0, GAME, L"The light of Time Trial and tests. The folders of ENVIRONMENTS are your own presets."},
     // the game's language when its menu is skipped (F1CE_SKIP_INTRO); otherwise the one the menu starts on
     // (runtime/hle_boot.cpp)
     {L"Language", L"F1CE_LANGUAGE",
@@ -294,6 +299,7 @@ bool checked(const Check& c) { return SendMessageW(c.h, BM_GETCHECK, 0, 0) == BS
 
 std::wstring mods_dir() { return g_exe_dir + L"\\MODS"; }
 std::wstring helmets_dir() { return g_exe_dir + L"\\PLAYER_HELMETS"; }
+std::wstring environments_dir() { return g_exe_dir + L"\\ENVIRONMENTS"; }
 
 // one choice per folder of dir: the folder name is the pack's name and the variable's value
 void add_packs(const wchar_t* env, const std::wstring& dir) {
@@ -541,6 +547,7 @@ void start_game() {
         if (wcscmp(c.env, PRESET_KEY)) SetEnvironmentVariableW(c.env, selected_value(c));
     SetEnvironmentVariableW(L"F1CE_MODS_DIR", mods_dir().c_str());
     SetEnvironmentVariableW(L"F1CE_HELMETS_DIR", helmets_dir().c_str());
+    SetEnvironmentVariableW(L"F1CE_ENV_DIR", environments_dir().c_str());
     for (Check& c : g_checks) {
         if (c.env[0] == L'-') { if (checked(c)) cmd += L" " + std::wstring(c.env); continue; }
         SetEnvironmentVariableW(c.env, checked(c) ? c.value : nullptr);
@@ -976,6 +983,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     g_ini = g_exe_dir + L"\\f1ce_launcher.ini";
     add_packs(L"F1CE_MOD_PACK", mods_dir());
     add_packs(L"F1CE_HELMET_PACK", helmets_dir());
+    add_packs(L"F1CE_RACE_ENV", environments_dir());
+    add_packs(L"F1CE_TT_ENV", environments_dir());
     add_gpus();
 
     NONCLIENTMETRICSW ncm{};

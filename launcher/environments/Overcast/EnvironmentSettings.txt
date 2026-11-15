@@ -1,0 +1,5 @@
+"Lights.Sun Colour"=3.0 3.0 3.1
+"Lights.Ambient Colour"=3.4 3.45 3.6
+"Atmospherics.Fog Colour"=4.0 4.1 4.4
+"Atmospherics.Fog density"=0.0008
+"HDR.Fixed Sun Luminance"=2

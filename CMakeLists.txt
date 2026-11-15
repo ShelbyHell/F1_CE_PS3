@@ -64,6 +64,7 @@ set(RUNTIME_SOURCES
   runtime/hle_misc.cpp
   runtime/hle_aspect.cpp
   runtime/hle_cubemap.cpp
+  runtime/hle_environment.cpp
   runtime/hle_gfxopts.cpp
   runtime/hle_skipfn.cpp
   runtime/hle_joblist.cpp
@@ -181,9 +182,10 @@ if(WIN32)
   target_link_options(f1ce_launcher PRIVATE -static -municode)
   # (SDL: the Steering Wheel tab reads the wheel as the game does)
   target_link_libraries(f1ce_launcher PRIVATE shell32 ole32 comctl32 uxtheme dxgi SDL3::SDL3-static)
-  # the built-in wheel profiles (Steering Wheel tab), next to the launcher
+  # the built-in wheel profiles (Steering Wheel tab) and example environment presets, next to the launcher
   add_custom_command(TARGET f1ce_launcher POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/launcher/wheels $<TARGET_FILE_DIR:f1ce_launcher>/wheels)
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/launcher/wheels $<TARGET_FILE_DIR:f1ce_launcher>/wheels
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/launcher/environments $<TARGET_FILE_DIR:f1ce_launcher>/ENVIRONMENTS)
 endif()
 # the new launcher (Dear ImGui on SDL3's renderer; Windows and Linux): its fonts and logo built into it
 if(F1CE_HOST STREQUAL "SDL")
@@ -218,7 +220,8 @@ if(F1CE_HOST STREQUAL "SDL")
     target_link_options(f1ce_launcher_new PRIVATE -static)
     target_link_libraries(f1ce_launcher_new PRIVATE dxgi)
     add_custom_command(TARGET f1ce_launcher_new POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/launcher/wheels $<TARGET_FILE_DIR:f1ce_launcher_new>/wheels)
+      COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/launcher/wheels $<TARGET_FILE_DIR:f1ce_launcher_new>/wheels
+      COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/launcher/environments $<TARGET_FILE_DIR:f1ce_launcher_new>/ENVIRONMENTS)
   else()
     find_package(Threads REQUIRED)
     target_link_libraries(f1ce_launcher_new PRIVATE Threads::Threads)
