@@ -6,6 +6,15 @@
                                                        named by its node path, world transforms applied); embedded
                                                        textures written as DDS next to the .obj, used by the MTL.
                                                        --only keeps the meshes under the named nodes
+  python -I tools/sg.py gltf <file.sg> <out.glb> [--only lod0]
+                                                       glTF binary for Blender, like obj but with both UV sets
+                                                       (UVMap = paint, UVMap.001 = decal sheet) and the textures
+                                                       as upright PNGs next to it; the decal sheet of each
+                                                       material is named in its extras (f1ce_decals): run
+                                                       tools/blender_decals.py in Blender to layer it on the paint
+  python -I tools/sg.py gltfimport <file.sg> <edited.glb> <out.sg> [--ref <exported.sg>]
+                                                       as objimport, from a glTF exported by Blender: the decal
+                                                       UVs (second UV map) are imported too
   python -I tools/sg.py objimport <file.sg> <edited.obj> <out.sg> [--ref <exported.sg>]
                                                        replace the geometry of the meshes named in the OBJ (as obj
                                                        writes them; any vertex/triangle count, new UVs); materials
@@ -39,7 +48,9 @@ Format (big endian, no alignment):
   The scene tree holds Transform and Mesh nodes (Camera and Light in some exported scenes); materials (UberShader),
   their ShaderObjects and the Texture nodes (original path + a complete GTF file) follow the tree.
 """
+import json
 import math
+import os
 import re
 import struct
 import sys
@@ -406,6 +417,144 @@ def cmd_obj(sg, out_obj, only=None):
     print(f'{out_obj}: {vbase - 1} vertices, {len(used)} materials, {len(written)} textures')
 
 
+def det3(m):
+    return (m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) +
+            m[2] * (m[3] * m[7] - m[4] * m[6]))
+
+
+def cmd_gltf(sg, out_glb, only=None, texture_file=None):
+    """glTF 2.0 binary: the scene tree below the root (node names and local matrices; with only, the branches that
+    lead to the exported meshes), a mesh per mesh node, TEXCOORD_0 = uv0 (paint), TEXCOORD_1 = uv1 (decal sheet),
+    the textures as upright PNG files (glTF v = 1 - v).
+    Materials: BaseColour as the base colour texture; the decal sheet (BaseColour2) has no glTF slot, so it is
+    named in the material's extras (f1ce_decals: PNG path relative to the .glb, f1ce_base: the paint's), which
+    Blender keeps as custom properties for tools/blender_decals.py.
+    texture_file: optional function(Texture) -> Path of a shared or existing PNG to use (written only when missing),
+    or None for the default <out>_textures/<original path>.png (always written)."""
+    out_glb = Path(out_glb)
+    tex_dir = out_glb.parent / (out_glb.stem + '_textures')
+    mats = {m.name: m for m in sg.materials}
+    texs = {t.name: t for t in sg.textures}
+    blob = bytearray()
+    views, accessors, images, textures, materials, meshes, nodes = [], [], [], [], [], [], []
+    pngs, gl_tex, mat_index = {}, {}, {}
+
+    def add(fmt, values, count, typ, target, minmax=False):
+        blob.extend(bytes(-len(blob) % 4))
+        data = struct.pack(f'<{len(values)}{fmt}', *values)
+        views.append({'buffer': 0, 'byteOffset': len(blob), 'byteLength': len(data), 'target': target})
+        blob.extend(data)
+        acc = {'bufferView': len(views) - 1, 'componentType': {'f': 5126, 'H': 5123, 'I': 5125}[fmt],
+               'count': count, 'type': typ}
+        if minmax:
+            n = len(values) // count
+            acc['min'] = [min(values[i::n]) for i in range(n)]
+            acc['max'] = [max(values[i::n]) for i in range(n)]
+        accessors.append(acc)
+        return len(accessors) - 1
+
+    def png(tname):
+        """The PNG of a texture node (relative URI), written on first use; None when not embedded/decodable."""
+        t = texs.get(tname)
+        if t is None or t.gtf is None or t.gtf.cube:
+            return None
+        if t.path not in pngs:
+            f = texture_file(t) if texture_file else None
+            if f is None or not Path(f).exists():
+                f = Path(f or tex_dir / safe_path(t.path).with_suffix('.png'))
+                try:
+                    w, h, px = gtf.decode_level(t.gtf)
+                except (KeyError, ValueError, IndexError):
+                    pngs[t.path] = None
+                    return None
+                f.parent.mkdir(parents=True, exist_ok=True)
+                gtf.write_png(f, w, h, gtf.flip_rows(w, h, px))
+            pngs[t.path] = os.path.relpath(f, out_glb.parent).replace('\\', '/')
+        return pngs[t.path]
+
+    def texture(uri):
+        if uri not in gl_tex:
+            images.append({'uri': uri, 'name': uri.split('/')[-1].rsplit('.', 1)[0]})
+            textures.append({'source': len(images) - 1})
+            gl_tex[uri] = len(textures) - 1
+        return gl_tex[uri]
+
+    def material(name):
+        if name not in mat_index:
+            smp = mats[name].samplers if name in mats else {}
+            pbr = {'metallicFactor': 0.0, 'roughnessFactor': 0.5}
+            mat = {'name': name, 'pbrMetallicRoughness': pbr, 'doubleSided': True}
+            extras = {}
+            base = png(smp.get('BaseColour'))
+            if base:
+                pbr['baseColorTexture'] = {'index': texture(base)}
+                extras['f1ce_base'] = base
+            if 'Opacity' in smp:
+                mat['alphaMode'] = 'BLEND'
+            decals = png(smp.get('BaseColour2'))
+            if decals:
+                extras['f1ce_decals'] = decals
+            if extras:
+                mat['extras'] = extras
+            materials.append(mat)
+            mat_index[name] = len(materials) - 1
+        return mat_index[name]
+
+    def exported(node, path):
+        m = node.mesh
+        return bool(m and 'position' in m.attrs and (not only or only.intersection(path + (node.name,))))
+
+    def wanted(node, path):
+        return exported(node, path) or any(wanted(c, path + (node.name,)) for c in node.children)
+
+    nverts = 0
+
+    def visit(node, path):
+        """glTF node of a scene node below the root (its local matrix; glTF turns the triangles of mirrored nodes
+        itself), with the wanted children; returns its index."""
+        nonlocal nverts
+        gl = {'name': safe(node.name)}
+        mx = node.matrix
+        if list(mx) != [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]:
+            gl['matrix'] = [mx[0], mx[1], mx[2], 0, mx[3], mx[4], mx[5], 0, mx[6], mx[7], mx[8], 0,
+                            mx[9], mx[10], mx[11], 1]
+        if exported(node, path):
+            m = node.mesh
+            n = m.nverts
+            attrs = {'POSITION': add('f', [c for p in m.attrs['position'] for c in p[:3]], n, 'VEC3', 34962,
+                                     minmax=True)}
+            if m.attrs.get('normal'):
+                attrs['NORMAL'] = add('f', [c for v in m.attrs['normal'] for c in _norm(v[:3])], n, 'VEC3', 34962)
+            for k, uv in enumerate((m.attrs.get('uv0'), m.attrs.get('uv1'))):
+                if uv:
+                    attrs[f'TEXCOORD_{k}'] = add('f', [c for t in uv for c in (t[0], 1.0 - t[1])], n, 'VEC2', 34962)
+            flat = [k for t in m.tris for k in t]
+            prim = {'attributes': attrs, 'material': material(m.material), 'mode': 4,
+                    'indices': add('H' if n <= 0xFFFF else 'I', flat, len(flat), 'SCALAR', 34963)}
+            meshes.append({'name': gl['name'], 'primitives': [prim]})
+            gl['mesh'] = len(meshes) - 1
+            nverts += n
+        nodes.append(gl)
+        at = len(nodes) - 1
+        kids = [visit(c, path + (node.name,)) for c in node.children if wanted(c, path + (node.name,))]
+        if kids:
+            gl['children'] = kids
+        return at
+
+    roots = [visit(c, ()) for c in sg.root.children if wanted(c, ())]
+    doc = {'asset': {'version': '2.0', 'generator': 'F1 CE tools/sg.py'}, 'scene': 0,
+           'scenes': [{'name': sg.root.name, 'nodes': roots}], 'nodes': nodes, 'meshes': meshes,
+           'materials': materials, 'textures': textures, 'images': images, 'samplers': [],
+           'accessors': accessors, 'bufferViews': views, 'buffers': [{'byteLength': len(blob)}]}
+    doc = {k: v for k, v in doc.items() if v != []}
+    js = json.dumps(doc, separators=(',', ':')).encode()
+    js += b' ' * (-len(js) % 4)
+    blob.extend(bytes(-len(blob) % 4))
+    out_glb.write_bytes(struct.pack('<4sII', b'glTF', 2, 12 + 8 + len(js) + 8 + len(blob)) +
+                        struct.pack('<I4s', len(js), b'JSON') + js + struct.pack('<I4s', len(blob), b'BIN\0') + blob)
+    print(f'{out_glb}: {nverts} vertices, {len(materials)} materials, {len(images)} textures')
+
+
 def find_texture(sg, key):
     """A Texture node by node name (file195), path (textures/ferrari06_cb.gtf) or file name (ferrari06_cb)."""
     k = key.replace('\\', '/').lower()
@@ -498,11 +647,11 @@ def _norm(v):
 
 
 class _Nearest:
-    """Nearest original vertex (position; among coincident ones the closest uv0 and normal) for the attributes OBJ
-    does not carry (uv1, occlusion)."""
+    """Nearest original vertex (position; among coincident ones the closest uv0, normal and uv1 when known) for the
+    attributes the file does not carry (uv1 in OBJ, occlusion)."""
 
-    def __init__(self, pos, uv, nrm=None):
-        self.pos, self.uv, self.nrm = pos, uv, nrm
+    def __init__(self, pos, uv, nrm=None, uv1=None):
+        self.pos, self.uv, self.nrm, self.uv1 = pos, uv, nrm, uv1
         mn = [min(p[i] for p in pos) for i in range(3)]
         mx = [max(p[i] for p in pos) for i in range(3)]
         self.cell = max(max(mx[i] - mn[i] for i in range(3)) / 24, 1e-4)
@@ -513,7 +662,7 @@ class _Nearest:
     def _key(self, p):
         return tuple(int(math.floor(c / self.cell)) for c in p)
 
-    def find(self, p, uv, n=None):
+    def find(self, p, uv, n=None, uv1=None):
         k = self._key(p)
         ring = lambda r: [i for dx in range(-r, r + 1) for dy in range(-r, r + 1) for dz in range(-r, r + 1)  # noqa
                           if max(abs(dx), abs(dy), abs(dz)) == r
@@ -530,29 +679,146 @@ class _Nearest:
         same = [i for i in cands if d2[i] <= best + 1e-10]      # coincident vertices (UV seams): closest UV
         if len(same) == 1:
             return same[0]
-        # UV seams and hard edges: same position, different uv0 or normal
+        # UV seams and hard edges: same position, different uv0, normal or decal uv1
         return min(same, key=lambda i: (sum((self.uv[i][j] - uv[j]) ** 2 for j in range(2)) if self.uv and uv else 0) +
-                   (sum((self.nrm[i][j] - n[j]) ** 2 for j in range(3)) if self.nrm and n else 0))
+                   (sum((self.nrm[i][j] - n[j]) ** 2 for j in range(3)) if self.nrm and n else 0) +
+                   (sum((self.uv1[i][j] - uv1[j]) ** 2 for j in range(2)) if self.uv1 and uv1 else 0))
 
 
-def geometry_from_obj(mesh: Mesh, world, faces, v, vt, vn):
-    """Vertices (attribute name -> value per vertex) and triangles of one object, in the node's own space."""
+def obj_meshes(text):
+    """{object name: (positions, uv0, uv1, normals, triangles)} of an OBJ: world space, game UVs (v down), no uv1;
+    normals None when some corner has none."""
+    objects, v, vt, vn = parse_obj(text)
+    out = {}
+    for name, faces in objects.items():
+        verts, index, tris = [], {}, []
+        for face in faces:
+            ids = []
+            for corner in face:
+                if corner not in index:
+                    index[corner] = len(verts)
+                    verts.append(corner)
+                ids.append(index[corner])
+            tris += [(ids[0], ids[k], ids[k + 1]) for k in range(1, len(ids) - 1)]
+        uv = [(vt[c[1]][0], 1.0 - vt[c[1]][1]) if c[1] is not None else (0.0, 0.0) for c in verts]
+        nrm = [vn[c[2]] for c in verts] if all(c[2] is not None for c in verts) else None
+        out[name] = ([v[c[0]] for c in verts], uv, None, nrm, tris)
+    return out
+
+
+def _quat_matrix(t, q, s):
+    """glTF translation / rotation quaternion (x, y, z, w) / scale -> row-vector affine matrix (12 floats)."""
+    x, y, z, w = q
+    r = [[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+         [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+         [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]]
+    # column vectors p' = R S p + t  ->  rows of (R S)^T
+    return [r[j][i] * s[i] for i in range(3) for j in range(3)] + list(t)
+
+
+def gltf_meshes(data: bytes, base_dir=None):
+    """{node path: (positions, uv0, uv1, normals, triangles)} of a glTF 2.0 (.glb, or .gltf with its buffers as
+    files in base_dir or data: URIs): node path = the names from the scene's top node down, joined by dots (as
+    mesh_paths; Blender's .001 suffixes dropped), node transforms applied (world space), game UVs (v down, from
+    glTF 1 - v), uv1 = TEXCOORD_1 when there is one, the primitives of a mesh joined."""
+    import base64
+    bins = []
+    if data[:4] == b'glTF':
+        p, doc = 12, None
+        while p < len(data):
+            n, kind = struct.unpack_from('<I4s', data, p)
+            chunk = data[p + 8:p + 8 + n]
+            if kind == b'JSON':
+                doc = json.loads(chunk)
+            elif kind == b'BIN\0':
+                bins.append(chunk)
+            p += 8 + n
+    else:
+        doc = json.loads(data)
+    buffers = []
+    for i, b in enumerate(doc.get('buffers', [])):
+        uri = b.get('uri')
+        if uri is None:
+            buffers.append(bins[0] if bins else b'')
+        elif uri.startswith('data:'):
+            buffers.append(base64.b64decode(uri.split(',', 1)[1]))
+        else:
+            from urllib.parse import unquote
+            buffers.append((Path(base_dir or '.') / unquote(uri)).read_bytes())
+    sizes = {'SCALAR': 1, 'VEC2': 2, 'VEC3': 3, 'VEC4': 4}
+    codes = {5120: ('b', 127), 5121: ('B', 255), 5122: ('h', 32767), 5123: ('H', 65535), 5125: ('I', 0),
+             5126: ('f', 0)}
+
+    def read(i):
+        a = doc['accessors'][i]
+        n, (code, scale) = sizes[a['type']], codes[a['componentType']]
+        if 'bufferView' not in a or 'sparse' in a:
+            raise ValueError('sparse or empty accessors are not handled (export without them)')
+        bv = doc['bufferViews'][a['bufferView']]
+        buf = buffers[bv['buffer']]
+        csize = struct.calcsize(code)
+        stride = bv.get('byteStride') or n * csize
+        start = bv.get('byteOffset', 0) + a.get('byteOffset', 0)
+        out = [struct.unpack_from(f'<{n}{code}', buf, start + k * stride) for k in range(a['count'])]
+        if a.get('normalized') and scale:
+            out = [tuple(max(c / scale, -1.0) for c in v) for v in out]
+        return out
+
+    out = {}
+
+    def visit(i, parent, path):
+        nd = doc['nodes'][i]
+        path = path + (re.sub(r'\.\d{3}$', '', nd.get('name') or f'node{i}'),)
+        if 'matrix' in nd:
+            mm = nd['matrix']       # column major, column vectors
+            local = [mm[0], mm[1], mm[2], mm[4], mm[5], mm[6], mm[8], mm[9], mm[10], mm[12], mm[13], mm[14]]
+        else:
+            local = _quat_matrix(nd.get('translation', (0, 0, 0)), nd.get('rotation', (0, 0, 0, 1)),
+                                 nd.get('scale', (1, 1, 1)))
+        world = mat_mul(local, parent) if parent else local
+        if 'mesh' in nd:
+            name = '.'.join(path)
+            pos, uv0, uv1, nrm, tris = [], [], [], [], []
+            flip = det3(world) < 0
+            for prim in doc['meshes'][nd['mesh']]['primitives']:
+                if prim.get('mode', 4) != 4:
+                    continue
+                at = prim['attributes']
+                p = read(at['POSITION'])
+                base = len(pos)
+                pos += [xform(v, world) for v in p]
+                nrm += [xform_dir(v, world) for v in read(at['NORMAL'])] if 'NORMAL' in at else [None] * len(p)
+                for key, dst in (('TEXCOORD_0', uv0), ('TEXCOORD_1', uv1)):
+                    dst += [(u, 1.0 - v) for u, v in read(at[key])] if key in at else [None] * len(p)
+                idx = [k[0] for k in read(prim['indices'])] if 'indices' in prim else list(range(len(p)))
+                tris += [(base + idx[k], base + idx[k + 2], base + idx[k + 1]) if flip else
+                         (base + idx[k], base + idx[k + 1], base + idx[k + 2]) for k in range(0, len(idx) - 2, 3)]
+            if pos:
+                out[name] = (pos, [u or (0.0, 0.0) for u in uv0], uv1 if all(uv1) else None,
+                             nrm if all(nrm) else None, tris)
+        for c in nd.get('children', []):
+            visit(c, world, path)
+
+    scene = doc.get('scenes', [{}])[doc.get('scene', 0)] if doc.get('scenes') else {}
+    roots = scene.get('nodes')
+    if roots is None:
+        kids = {c for nd in doc.get('nodes', []) for c in nd.get('children', [])}
+        roots = [i for i in range(len(doc.get('nodes', []))) if i not in kids]
+    for i in roots:
+        visit(i, None, ())
+    return out
+
+
+def geometry_from_verts(mesh: Mesh, world, pos_w, uv, uv1, nrm_w, tris):
+    """Vertices (attribute name -> value per vertex) and triangles of one object (world-space positions and normals,
+    game UVs; uv1 and normals may be None), in the node's own space."""
     inv = mat_inverse(world)
     rot = [world[0:3], world[3:6], world[6:9]]
-    verts, index, tris = [], {}, []
-    for face in faces:
-        ids = []
-        for corner in face:
-            if corner not in index:
-                index[corner] = len(verts)
-                verts.append(corner)
-            ids.append(index[corner])
-        tris += [(ids[0], ids[k], ids[k + 1]) for k in range(1, len(ids) - 1)]
-    pos = [xform(v[c[0]], inv) for c in verts]
-    uv = [(vt[c[1]][0], 1.0 - vt[c[1]][1]) if c[1] is not None else (0.0, 0.0) for c in verts]
-    if all(c[2] is not None for c in verts):
+    pos = [xform(p, inv) for p in pos_w]
+    verts = pos
+    if nrm_w:
         # world -> node space: n * R^T (the rotation part of the node's world matrix)
-        nrm = [_norm([sum(vn[c[2]][i] * rot[j][i] for i in range(3)) for j in range(3)]) for c in verts]
+        nrm = [_norm([sum(n[i] * rot[j][i] for i in range(3)) for j in range(3)]) for n in nrm_w]
     else:
         acc = [[0.0, 0.0, 0.0] for _ in verts]
         for a, b, c in tris:
@@ -591,17 +857,36 @@ def geometry_from_obj(mesh: Mesh, world, faces, v, vt, vn):
         w = 1.0 if sum(cr[i] * bit[k][i] for i in range(3)) >= 0 else -1.0
         tangent.append((t[0], t[1], t[2], w))
     out = {'position': pos, 'uv0': uv, 'normal': nrm, 'tangent': tangent}
-    near = _Nearest(mesh.attrs['position'], mesh.attrs.get('uv0'), mesh.attrs.get('normal'))
-    nearest = [near.find(pos[k], uv[k], nrm[k]) for k in range(len(verts))]
+    if uv1 and 'uv1' in mesh.attrs:
+        out['uv1'] = uv1
+    near = _Nearest(mesh.attrs['position'], mesh.attrs.get('uv0'), mesh.attrs.get('normal'), mesh.attrs.get('uv1'))
+    nearest = [near.find(pos[k], uv[k], nrm[k], uv1[k] if uv1 else None) for k in range(len(verts))]
     for name, *_ in mesh.layout:
         if name not in out:
             src = mesh.attrs.get(name)
             if src is None:
                 raise ValueError(f'attribute {name} of type not handled')
             out[name] = [src[i] for i in nearest]
-    # unchanged: same counts and every vertex on an original one (Blender re-indexes, the transforms add noise)
-    out['_unchanged'] = len(verts) == mesh.nverts and len(tris) == mesh.ntris and all(
-        sum((mesh.attrs['position'][i][j] - pos[k][j]) ** 2 for j in range(3)) < 1e-8 for k, i in enumerate(nearest))
+
+    def same(name, k, i, n, eps):
+        src = mesh.attrs.get(name)
+        return not src or name not in out or sum((src[i][j] - out[name][k][j]) ** 2 for j in range(n)) < eps
+    # unchanged: every vertex on an original one, with its UVs, and the same triangles on the original vertices
+    # (Blender re-indexes and splits vertices, the transforms add noise, UVs are stored as halves); original vertices
+    # the file cannot tell apart (repeated ones; decal seams in an OBJ, which has no uv1) count as one
+    first = {}
+    keys = ('position', 'uv0', 'normal') + (('uv1',) if uv1 else ())
+    canon = [first.setdefault(tuple(tuple(mesh.attrs[a][i]) if mesh.attrs.get(a) else () for a in keys), i)
+             for i in range(mesh.nverts)]
+
+    def tri_key(t):
+        t = tuple(canon[i] for i in t)
+        k = t.index(min(t))
+        return t[k:] + t[:k]
+    out['_unchanged'] = len(tris) == mesh.ntris and all(
+        same('position', k, i, 3, 1e-8) and same('uv0', k, i, 2, 1e-6) and same('uv1', k, i, 2, 1e-6)
+        for k, i in enumerate(nearest)) and (
+        sorted(tri_key(tuple(nearest[k] for k in t)) for t in tris) == sorted(tri_key(t) for t in mesh.tris))
     return out, tris
 
 
@@ -771,17 +1056,34 @@ def import_obj(data: bytes, obj_text: str, log=print, ref: bytes = None, only=No
     (the garage model <Team>06_fe.sg has the race model's lod0 with its own occlusion and the suspension at rest):
     its world matrices take the geometry back to node space. only: the object names to import (others are left
     alone); changed: a list the names of the replaced meshes are appended to."""
+    return import_meshes(data, obj_meshes(obj_text), log, ref, only, changed)
+
+
+def import_gltf(data: bytes, gltf: bytes, log=print, ref: bytes = None, only=None, changed=None, base_dir=None):
+    """import_obj for a glTF written by cmd_gltf and edited in Blender: the second UV map (TEXCOORD_1) gives the
+    decal UVs (nearest original vertex when it was deleted); mirrored nodes get their triangles turned back as
+    cmd_gltf turned them."""
+    return import_meshes(data, gltf_meshes(gltf, base_dir), log, ref, only, changed, unmirror=True)
+
+
+def import_meshes(data: bytes, objects, log=print, ref: bytes = None, only=None, changed=None, unmirror=False):
+    """import_obj on {object name: (positions, uv0, uv1, normals, triangles)} (obj_meshes, gltf_meshes)."""
     sg = SceneGraph(data)
-    objects, v, vt, vn = parse_obj(obj_text)
     by_path, by_name = mesh_paths(sg)
     ref_path = mesh_paths(SceneGraph(ref))[0] if ref is not None else {}
     edits = []
-    for name, faces in objects.items():
+    for name, (pos_w, uv0, uv1, nrm_w, faces) in objects.items():
         key = re.sub(r'\.\d{3}$', '', name or '')
         if only is not None and key not in only:
             continue
         hit = by_path.get(key) or (by_name[key.split('.')[-1]][0]
                                    if len(by_name.get(key.split('.')[-1], [])) == 1 else None)
+        if hit is None and len(key) >= 50:
+            # Blender cuts object names to 63 bytes (less with a .001 suffix): the one node path starting so
+            longer = [p for p in by_path if p.startswith(key)]
+            if len(longer) == 1:
+                key = longer[0]
+                hit = by_path[key]
         if hit is None:
             log(f'{name}: no mesh of that name, skipped')
             continue
@@ -798,7 +1100,9 @@ def import_obj(data: bytes, obj_text: str, log=print, ref: bytes = None, only=No
             except ValueError as e:
                 log(f'{name}: {e}')
                 continue
-        attrs, tris = geometry_from_obj(m, world, faces, v, vt, vn)
+        if unmirror and det3(world) < 0:
+            faces = [(a, c, b) for a, b, c in faces]
+        attrs, tris = geometry_from_verts(m, world, pos_w, uv0, uv1, nrm_w, faces)
         if attrs.pop('_unchanged'):
             continue        # unchanged (an OBJ written back by Blender is re-indexed, nothing else)
         groups = split_batches(m, tris)
@@ -834,6 +1138,15 @@ def main(argv):
     elif argv[0] == 'obj' and len(argv) > 2:
         only = set(argv[argv.index('--only') + 1].split(',')) if '--only' in argv[3:-1] else None
         cmd_obj(sg, argv[2], only)
+    elif argv[0] == 'gltf' and len(argv) > 2:
+        only = set(argv[argv.index('--only') + 1].split(',')) if '--only' in argv[3:-1] else None
+        cmd_gltf(sg, argv[2], only)
+    elif argv[0] == 'gltfimport' and len(argv) > 3:
+        ref = Path(argv[argv.index('--ref') + 1]).read_bytes() if '--ref' in argv[4:-1] else None
+        new = import_gltf(sg.data, Path(argv[2]).read_bytes(), ref=ref, base_dir=Path(argv[2]).parent)
+        SceneGraph(new)     # the result must parse
+        Path(argv[3]).write_bytes(new)
+        print(f'{argv[3]}: {len(new)} bytes')
     elif argv[0] == 'textures' and len(argv) > 2:
         cmd_textures(sg, argv[2])
     elif argv[0] == 'objimport' and len(argv) > 3:

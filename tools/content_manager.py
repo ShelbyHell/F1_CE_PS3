@@ -218,7 +218,7 @@ class App(tk.Tk):
                           ('Refresh', self.refresh)]:
             ttk.Button(left, text=text, command=cmd).pack(fill='x')
         self.models_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(left, text='New packs with 3D models (OBJ)', variable=self.models_var).pack(anchor='w')
+        ttk.Checkbutton(left, text='New packs with 3D models (OBJ + glTF for Blender)', variable=self.models_var).pack(anchor='w')
 
         right = ttk.Frame(body)
         body.add(right, weight=4)
