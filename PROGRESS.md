@@ -1125,3 +1125,24 @@ Garage model import (2026-11-14, same branch): `<Team>06_fe.sg` (stream.wad, the
 Database and Content Manager (2026-11-14, same branch): points system found (0x1BFC14, table at 0x1000461C, 8 scoring places in the code), hooked (`points_hook`, mods.cpp) to read a season pack's `DATABASE/points.txt`; `tools/dynamics.py` decodes dynamics.bin's sections and exports per-team aero / engine / gearbox / failure values (meanings read from the data); the six driver ratings feed the AI skill block (0x104AD4 x 0.01, 0x1072A4); `F1CE_LAST_LAP=<s>` calls the retail cheat goto_last_lap after the AI takes the car; first Content Manager (`tools/content_manager.py`, Tk): packs, teams, drivers, points, helmet grid, template/build.
 Tests (2026-11-14): points hook confirmed in a race (table loaded, points(0) = 25 at the player's finish); a Honda with dynamics.bin section 1/2 words changed (engine w18 x1.9, drag 0.30) raced at the same speeds as the original, so those meanings are unconfirmed; scripted races need `F1CE_WHEEL=0` when a wheel is plugged in (it takes the player's input on Grid setup); `F1CE_LAST_LAP` now calls goto_last_lap's worker 0x1534DC with the player's driver (the retail cheat passes NULL in a Quick Race and crashed).
 Content Manager after the first user test (2026-11-14): progress bar and log (season_pack.py PROGRESS lines, unbuffered child); paint / decal / LOD files found from the race model's two-layer material on lod0 (names differ per team; classic cars: the livery mesh's texture) instead of guessed names; WHEELS/ folder and a Rims tab (rims, blurred, normal, sidewall, treads, shared-by list from entities cars fields 62/63/67/68); every picture says where the game uses it. Tested: the garage car takes the race model's base paint.
+
+**2026-11-15** – replays and the Time Trial ghost at 60 fps. How the game does them (for future work):
+- Both are *input* recordings re-simulated by the physics, not position recordings. Per tick (60 Hz, in both frame
+  rate modes) 0x122960 (from the cars' update 0xD2C08) writes each car's control sample, 8 bytes = car +0x13C..0x143
+  (throttle byte, brake byte, steering s16, flag word), into a ring `{index, data, size, wrap}`. Car +0x34 bit 31:
+  driven from the ring at +0x130 (replay), bit 30: from +0x134 (ghost); 0x112818 applies the sample to the physics car.
+- Replay object (session +0x10, ctor 0x14E4F0(size 7200 ticks, keyframes); per tick 0x14C8FC via 0x13FD38 at the end of
+  the session tick): every size/2 ticks a full world snapshot (0x17DF78 save / 0x17E05C load, size 0x17E140); instant
+  replay loads the newest snapshot inside the window and rewinds every car's ring to that tick. Session +0x1C is the
+  start snapshot. Lua glue: `isReplaying` (0x1F9154, *0x10006C70 +0x28), `stop_replay` / `restart_replay` / `save_replay`.
+- Ghost (Time Trial session +0x1510, code 0x5F3D08-0x5F6E30): two rings of 0x2A30 samples (3 min at 60 Hz) swapped at a
+  new best lap (0x5F4A7C), plus the car state saved at the lap start (0x5F4C8C, +0x18 / size +0x48) that 0x5F4E54 loads
+  into the ghost car; 0x5F62E0 (per tick from the TT tick 0x61FE30) counts +0x28 and hides the ghost after +0x2C
+  samples. Save files: 0x140 header + saved state + samples (0x5F653C, limit 0x5A000 bytes).
+- The 60 fps fault: the shake filter put the filtered car state into the car objects right after the physics
+  (0x17B200), inside the tick, so the snapshots and the ghost's lap-start state saved filtered states (and the cars'
+  input / AI code at the start of the next tick saw them). A re-simulation from a state that is not the true one drifts
+  off the recorded line. Now the filter is applied only after the frame's last tick (probe 0x249550, before the
+  per-frame code) and removed before every tick (probe 0x249518; 0x249B38 / 0x249B40 for the first frame in 0x249950),
+  and it skips words that no longer hold the physics result (a snapshot or ghost load since). 60 fps AI race at
+  Silverstone ran clean (filter on, no fps change); replay and ghost confirmed working by the user the same day.

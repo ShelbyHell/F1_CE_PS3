@@ -41,8 +41,14 @@ static void phys_snap(PPUContext& c) {
 // x = s3 - (s3 - 2 s2 + s1) / 4 from the state at the start of the last two substeps (s1, s2) and at the end (s3), which
 // removes a period-2 component exactly and leaves steady motion without delay (error a * dt^2 / 4, under 1 mm). The
 // physics state is put back before the next tick, so the simulation is the original's.
-// Filtered: each 16-byte quad of the car object whose 12 words (3 states) are all zero or normal floats; constant words
-// come out bit-exact. Restored: each word that still holds the filtered value (other writers keep theirs).
+// The filter is applied after the frame's last tick (main loop 0x2494a4, before the per-frame code at 0x249550) and
+// removed before each tick (0x249518), so no game logic sees it: the replays and the Time Trial ghost are recorded inputs
+// re-simulated from saved states (world snapshots of the replay object 0x14c8fc, the ghost's lap start in 0x5f62e0),
+// both taken in the tick after the physics. With the filter applied right after the physics they saved filtered states
+// and the re-simulation drifted off the recorded line at 60 fps (2026-11-15).
+// Filtered: each 16-byte quad of the car object whose 12 words (3 states) are all zero or normal floats and whose words
+// still hold the physics result (s3; a replay or the ghost may have loaded another state since); constant words come out
+// bit-exact. Restored: each word that still holds the filtered value (other writers keep theirs).
 bool shake_filter_on() {
     static const bool on = getenv("F1CE_60FPS") && !(getenv("F1CE_SHAKE_FILTER") && atoi(getenv("F1CE_SHAKE_FILTER")) == 0);
     return on;
@@ -57,12 +63,13 @@ constexpr u32 SOUND_RING = 0x1170, SOUND_RING_END = 0x1370;
 struct ShakeCar {
     u32 car = 0;
     int substeps = 0;                 // substeps seen in this tick
-    std::vector<u8> s1, s2;           // the car at the start of the last two substeps
+    std::vector<u8> s1, s2, s3;       // the car at the start of the last two substeps and at the end of the physics
     std::vector<u32> saved_ofs, saved_orig, saved_new;   // words replaced by the filter
     std::vector<u32> prev_ofs, prev_orig, prev_new;      // the same for the tick before (kept for ticks without substeps)
 };
 std::vector<ShakeCar> g_shake;
 bool g_in_tick = false;
+bool g_applied = false;   // the car objects hold the filtered state
 
 bool float_word(u32 w) {
     const u32 e = (w >> 23) & 0xFF;
@@ -71,14 +78,18 @@ bool float_word(u32 w) {
     return e < 127 + 24;                       // |x| < 2^24
 }
 
+// also starts a new tick: a frame of two ticks filters from the substeps of the second
 void shake_restore() {
     for (ShakeCar& s : g_shake) {
-        for (size_t i = 0; i < s.saved_ofs.size(); i++)
-            if (ld32(s.car + s.saved_ofs[i]) == s.saved_new[i]) st32(s.car + s.saved_ofs[i], s.saved_orig[i]);
-        s.prev_ofs.swap(s.saved_ofs); s.prev_orig.swap(s.saved_orig); s.prev_new.swap(s.saved_new);
-        s.saved_ofs.clear(); s.saved_orig.clear(); s.saved_new.clear();
+        if (g_applied) {
+            for (size_t i = 0; i < s.saved_ofs.size(); i++)
+                if (ld32(s.car + s.saved_ofs[i]) == s.saved_new[i]) st32(s.car + s.saved_ofs[i], s.saved_orig[i]);
+            s.prev_ofs.swap(s.saved_ofs); s.prev_orig.swap(s.saved_orig); s.prev_new.swap(s.saved_new);
+            s.saved_ofs.clear(); s.saved_orig.clear(); s.saved_new.clear();
+        }
         s.substeps = 0;
     }
+    g_applied = false;
 }
 
 void shake_apply() {
@@ -109,7 +120,8 @@ void shake_apply() {
             for (int k = 0; k < 4; k++) {
                 a[k] = be(&s.s1[q + 4 * k]);
                 b[k] = be(&s.s2[q + 4 * k]);
-                c3[k] = ld32(s.car + q + 4 * k);
+                c3[k] = be(&s.s3[q + 4 * k]);
+                ok &= ld32(s.car + q + 4 * k) == c3[k];
                 ok &= float_word(a[k]) && float_word(b[k]) && float_word(c3[k]);
                 changed |= a[k] != c3[k] || b[k] != c3[k];
             }
@@ -126,20 +138,32 @@ void shake_apply() {
             }
         }
     }
+    g_applied = true;
 }
 }  // namespace
 
 void sub_0017B200(PPUContext& __restrict c);
 
-// the player car's tick (3 substeps through 0x116d38)
+// the cars' physics of a tick (3 substeps each through 0x116d38); also called outside the main loop's ticks (0x140030:
+// many in a row when a session starts or restarts)
 bool car_tick_hook(PPUContext& c) {
     if (g_in_tick || !shake_filter_on()) return false;
     shake_restore();
     g_in_tick = true;
     sub_0017B200(c);
     g_in_tick = false;
-    shake_apply();
+    for (ShakeCar& s : g_shake)
+        if (s.substeps) memcpy(s.s3.data(), gmem(s.car), CAR_SIZE);
     return true;
+}
+
+// main loop 0x2494a4 (and its first frame in 0x249950): before each tick and after the frame's last one
+void shake_tick_probe(PPUContext&) {
+    if (shake_filter_on()) shake_restore();
+}
+
+void shake_frame_probe(PPUContext&) {
+    if (shake_filter_on()) shake_apply();
 }
 
 // wheels, first function of each substep of a car
@@ -155,6 +179,7 @@ bool wheel_update_hook(PPUContext& c) {
             it->car = car;
             it->s1.resize(CAR_SIZE);
             it->s2.resize(CAR_SIZE);
+            it->s3.resize(CAR_SIZE);
             if (g_shake.size() == 1) LOG_I("shake filter on (first car %08x)", car);
         }
         it->s1.swap(it->s2);
