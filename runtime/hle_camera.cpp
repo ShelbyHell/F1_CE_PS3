@@ -24,6 +24,11 @@
 //  * The external (chase) cameras turn around the car with the right stick (F1CE_CAM_ORBIT=1, default): left/right
 //    up to 180 degrees (behind = looking at the front of the car), up/down raises and lowers the view; the camera
 //    springs back when the stick is released. F1CE_CAM_ORBIT_TEST=<yaw>,<pitch> (degrees) holds a fixed orbit.
+//  * F1CE_TVPOD_SHAKE=0 turns off the camera shake of the TV pod cameras (ids 2, 3 and the split-screen 0xc): the
+//    fixed-camera update 0x36ead8 shakes the camera matrix with 0x36defc(PlayerCam, matrix, controller +0x88 byte),
+//    which only acts on ids 2/3/0xc (TV pods) and 4/5 (cockpit, nose) and returns untouched when that byte is set;
+//    the hook returns the same way for the TV pod ids. (The record's +0x34 flag gates another shake, 0x36c764, but it
+//    is 0 in the TV pod records.)
 //  * F1CE_CAM_LOG=1 logs the state once a second; F1CE_CAMERA=<id> forces that camera id (test aids).
 #include <algorithm>
 #include <bit>
@@ -184,6 +189,12 @@ void apply_tvcam(u32 set) {
     st32(rec3 + 0x34, ld32(rec2 + 0x34));
 }
 
+// ---- TV pod camera shake -----------------------------------------------------------------------------------------
+bool tvpod_shake_on() {
+    static const bool v = env_on("F1CE_TVPOD_SHAKE", true);
+    return v;
+}
+
 // ---- right-stick orbit of the chase cameras -----------------------------------------------------------------------
 bool orbit_on() {
     static const bool v = env_on("F1CE_CAM_ORBIT", true);
@@ -317,6 +328,15 @@ bool playercam_update_hook(PPUContext& c) {
         }
     }
     return true;
+}
+
+// camera shake 0x36defc: r3 PlayerCam, r4 camera matrix, r5 the controller's no-shake byte
+bool camshake_hook(PPUContext& c) {
+    if (tvpod_shake_on()) return false;
+    const u32 pc = (u32)c.r[3];
+    const u32 list = ld32(pc + 0x168), idx = ld32(pc + 0x80);
+    const u32 id = list ? ld32(list + idx * 4) : ~0u;
+    return id == 2 || id == 3 || id == 0xc;
 }
 
 // PlayerCam::SetCamera (vtable slot 10): r3 PlayerCam, r4 index

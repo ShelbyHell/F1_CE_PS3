@@ -116,6 +116,8 @@ Combo g_combos[] = {
      {{L"On", nullptr}, {L"On, tune with the numpad", L"tune"}, {L"Off (original camera)", L"0"}}, 0, GAME,
      L"The second TV pod view of the camera cycle as a broadcast T-cam. Off: the game's own TV pod offset camera. "
      L"Tune: the numpad moves it, the values show on the console and are saved in tvcam_tune.ini."},
+    {L"TV pod camera shake", L"F1CE_TVPOD_SHAKE", {{L"On (original)", nullptr}, {L"Off", L"0"}}, 0, GAME,
+     L"The speed shake of both TV pod views of the camera cycle (also the onboard TV camera)."},
     {L"Chase cam look-around", L"F1CE_CAM_ORBIT", {{L"On", nullptr}, {L"Off", L"0"}}, 0, GAME,
      L"The right stick turns the chase cameras around the car."},
     // lighting of the track by session type, or a preset folder of ENVIRONMENTS (add_packs; runtime/hle_environment.cpp)

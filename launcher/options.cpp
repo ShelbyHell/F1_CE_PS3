@@ -84,6 +84,8 @@ std::vector<Option> make_options() {
                        {{"On", nullptr}, {"On, tune with the numpad", "tune"}, {"Off (original camera)", "0"}}, 0,
                        "The second TV pod view of the camera cycle as a broadcast T-cam. Off: the game's own TV pod "
                        "offset camera. Tune: the numpad moves it, values on the console, saved in tvcam_tune.ini."));
+    v.push_back(choice(GENERAL, "TV pod camera shake", "F1CE_TVPOD_SHAKE", {{"On (original)", nullptr}, {"Off", "0"}}, 0,
+                       "The speed shake of both TV pod views of the camera cycle (also the onboard TV camera)."));
     v.push_back(choice(GENERAL, "Race environment", "F1CE_RACE_ENV",
                        {{"Early afternoon (original)", nullptr}, {"Sunset", "sunset"}}, 0,
                        "The light of races, Grands Prix and practice: sun, sky, fog and post effects. The folders of "
