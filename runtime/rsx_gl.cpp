@@ -1030,7 +1030,8 @@ struct RegionEntry {
 };
 std::unordered_map<u64, RegionEntry> g_regions;
 
-// drops vertex/index buffers not drawn for 120 frames (dynamic geometry in ring buffers gets a new key every frame)
+// drops vertex buffers not drawn for 120 frames (dynamic geometry in ring buffers gets a new key every frame); the
+// index lists go in slices every frame (evict_index_caches, rsx_draw_shared.inl: one pass took ~45 ms in the race)
 void evict_index_caches(u32 slices);
 void evict_buffers() {
     std::vector<GLuint> dead;
@@ -1039,7 +1040,6 @@ void evict_buffers() {
             if (it->second.buf) dead.push_back(it->second.buf);
             it = g_vtx_cache.erase(it);
         } else ++it;
-    evict_index_caches(1);
     for (auto it = g_regions.begin(); it != g_regions.end();)
         if (g_frame - it->second.last_frame > 120) {
             if (it->second.buf) dead.push_back(it->second.buf);
@@ -2728,6 +2728,13 @@ bool report(u32 type, u32 ea) {
         glBeginQuery(GL_SAMPLES_PASSED, g_zpass.active);
     }
     g_zpass.pending.push_back({ea, g_zpass.spans});
+    static const bool zlog = getenv("F1CE_ZPASS_LOG") != nullptr;   // debug: the target each report is issued on
+    static u64 last_draws = 0;
+    if (zlog && g_frame % 300 == 0)
+        LOG_I("zpass report %06x: counting=%d aa=%08x target %08x %ux%u fmt %x zeta %08x, %llu draws since the last report",
+              ea & 0xFFFFFF, g_zpass.enabled, reg(0x1D7C), reg(0x0210), reg(0x0200) >> 16, reg(0x0204) >> 16, reg(0x0208), reg(0x0214),
+              (unsigned long long)(g_draws - last_draws));
+    last_draws = g_draws;
     return true;
 }
 void method(u32 m, u32 arg) {
@@ -2735,7 +2742,7 @@ void method(u32 m, u32 arg) {
     // fast path: most methods only set state (read at draw time); the ones handled below are flagged in a table
     static const auto special = [] {
         std::array<bool, 0x800> t{};
-        for (u32 x : {0x1D7Cu, 0x1D84u, 0x17C8u, 0x1E9Cu, 0x1EFCu, 0x1D94u, 0x1808u, 0x1814u, 0x1824u}) t[x >> 2] = true;
+        for (u32 x : {0x1D7Cu, 0x17CCu, 0x17C8u, 0x1E9Cu, 0x1EFCu, 0x1D94u, 0x1808u, 0x1814u, 0x1824u}) t[x >> 2] = true;
         for (u32 x = 0x0B80; x < 0x0C00; x += 4) t[x >> 2] = true;   // TRANSFORM_PROGRAM
         for (u32 x = 0x1F00; x < 0x1F80; x += 4) t[x >> 2] = true;   // TRANSFORM_CONSTANT
         return t;
@@ -2744,14 +2751,16 @@ void method(u32 m, u32 arg) {
     if (__builtin_expect(inited, 1) && m < 0x2000 && !special[m >> 2]) { R[m >> 2] = arg; return; }
     gl_init_once();
     inited = true;
-    if (m == 0x1D7C || m == 0x1D84) {   // debug: distinct values (AA control / zpass enable)
+    if (m == 0x1D7C || m == 0x17CC) {   // debug: distinct values (AA control / zpass enable)
         static std::set<u64> seen;
         static std::mutex mu;
         std::lock_guard lk(mu);
         if (seen.size() < 64 && seen.insert(((u64)m << 32) | arg).second) LOG_I("rsx: method %04x = %08x (frame %llu)", m, arg, (unsigned long long)g_frame);
     }
-    if (m == 0x1D7C) R[m >> 2] = arg;   // ANTI_ALIASING_CONTROL (bit 4: alpha to coverage)
-    if (gl_ok && m == 0x1D7C) { zpass_enable(arg & 1); return; }   // NV4097_SET_ZPASS_PIXEL_COUNT_ENABLE
+    if (m == 0x1D7C) { R[m >> 2] = arg; return; }   // ANTI_ALIASING_CONTROL (bit 0: multisampling, bit 4: alpha to coverage)
+    // NV4097_SET_ZPASS_PIXEL_COUNT_ENABLE: the game turns counting on once (0x42D8xx) and leaves it on. (It used to be
+    // taken from bit 0 of 0x1D7C, the multisampling switch, so reports issued while that was off counted nothing.)
+    if (m == 0x17CC) { R[m >> 2] = arg; if (gl_ok) zpass_enable(arg & 1); return; }
     if (gl_ok && m == 0x17C8 && arg == 1) {                         // NV4097_CLEAR_REPORT_VALUE (ZPASS_PIXEL_CNT)
         bool on = g_zpass.enabled;
         zpass_enable(false);
@@ -2817,6 +2826,7 @@ void method(u32 m, u32 arg) {
     }
 }
 
+u64 g_3d_frame = 0;   // frame of the first 3D scene (F1CE_QUIT_AFTER_3D runs), for F1CE_DUMP_WINDOW_RANGE=+a:b
 void flip(u32 ea, u32 pitch, u32 width, u32 height) {
     note_display(ea - mem::RSX_LOCAL);
     gl_init_once();
@@ -2900,8 +2910,21 @@ void flip(u32 ea, u32 pitch, u32 width, u32 height) {
         overlay_pass(ww, wh);
         overlay_drawn = true;
         {   // debug: F1CE_DUMP_WINDOW=<n> saves the window (after presentation) every n-th frame as frame_w_<frame>_WxH.argb
+            // (F1CE_DUMP_WINDOW_RANGE=<first>:<last> limits it to those frames; +<first>:<last> counts them from the
+            // first 3D scene of a F1CE_QUIT_AFTER_3D run, whose frame number depends on the mode)
             static const int dw = getenv("F1CE_DUMP_WINDOW") ? atoi(getenv("F1CE_DUMP_WINDOW")) : 0;
-            if (dw > 0 && g_frame % (u64)dw == 0) {
+            static u64 dw_lo = 0, dw_hi = ~0ull;
+            static bool dw_rel = false;
+            static const bool dw_range = [] {
+                if (const char* r = getenv("F1CE_DUMP_WINDOW_RANGE")) {
+                    dw_rel = *r == '+';
+                    sscanf(r + dw_rel, "%llu:%llu", (unsigned long long*)&dw_lo, (unsigned long long*)&dw_hi);
+                }
+                return true;
+            }();
+            (void)dw_range;
+            const u64 base = dw_rel ? (g_3d_frame ? g_3d_frame : ~0ull / 2) : 0;
+            if (dw > 0 && g_frame % (u64)dw == 0 && g_frame >= base + dw_lo && g_frame <= base + dw_hi) {
                 std::vector<u32> px((size_t)ww * wh), fl(px.size());
                 glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
                 glReadPixels(0, 0, ww, wh, GL_BGRA, GL_UNSIGNED_BYTE, px.data());
@@ -2968,6 +2991,7 @@ void flip(u32 ea, u32 pitch, u32 width, u32 height) {
         if (quit_after >= 0) {
             if (!start_us && frame_draws >= 800) {
                 start_us = time_usec();
+                g_3d_frame = g_frame;
                 LOG_I("rsx: 3D scene detected at frame %llu (%llu draws), %.1f s after the first frame", (unsigned long long)g_frame,
                       (unsigned long long)frame_draws, (time_usec() - g_start_us) / 1e6);
             }
@@ -3024,6 +3048,7 @@ void flip(u32 ea, u32 pitch, u32 width, u32 height) {
     if (g_frame % 600 == 1) LOG_I("rsx: frame %llu, %llu draws, %zu programs, %zu textures, %zu surfaces, %zu vertex + %zu index buffers",
                                   (unsigned long long)g_frame, (unsigned long long)g_draws, g_programs.size(),
                                   g_textures.size(), g_surfaces.size(), g_vtx_cache.size(), g_idx_cache.size());
+    evict_index_caches(60);
     if (g_frame % 60 == 0) { evict_buffers(); evict_raw_regions(); }
     heap_end_frame(g_heap);
     heap_end_frame(g_iheap);

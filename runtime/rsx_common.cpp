@@ -1051,7 +1051,8 @@ u32 zpass_value(u32 ea, u64 samples) {
     static const bool zlog = getenv("F1CE_ZPASS_LOG") != nullptr;
     static u64 last_burst = 0;
     static u32 burst = 0;
-    const u32 v = (u32)(samples / (res_scale_x() * res_scale_y()));
+    static const char* force = getenv("F1CE_ZPASS_FORCE");   // debug: every report gets this count
+    const u32 v = force ? (u32)strtoul(force, nullptr, 10) : (u32)(samples / (res_scale_x() * res_scale_y()));
     if (zlog) {
         const u64 now = time_usec();
         if (now - last_burst > 10000000) { last_burst = now; burst = 200; }

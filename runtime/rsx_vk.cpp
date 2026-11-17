@@ -1797,7 +1797,7 @@ std::vector<u32> g_qres(QRES);
 u64 g_qnext = 1;
 struct ZPassState {
     std::vector<u64> spans;   // query ids since the last clear
-    struct Pending { u32 ea; std::vector<u64> spans; u64 serial; };
+    struct Pending { u32 ea; std::vector<u64> spans; u64 serial; u64 frame = 0; };
     std::deque<Pending> pending;
 } g_zpass;
 
@@ -1839,6 +1839,13 @@ void zpass_resolve() {
         u64 total = 0;
         for (u64 id : p.spans) total += g_qres[id & (QRES - 1)];
         st32(p.ea + 8, zpass_value(p.ea, total));
+        static const bool zlog = getenv("F1CE_ZPASS_LOG") != nullptr;   // debug: frames between a report and its value
+        if (zlog) {
+            static u64 hist[5] = {}, n = 0;
+            hist[std::min<u64>(g_frame - p.frame, 4)]++;
+            if (++n % 20000 == 0) LOG_I("zpass lag (frames 0/1/2/3/4+): %llu %llu %llu %llu %llu", (unsigned long long)hist[0],
+                                        (unsigned long long)hist[1], (unsigned long long)hist[2], (unsigned long long)hist[3], (unsigned long long)hist[4]);
+        }
         g_zpass.pending.pop_front();
     }
 }
@@ -2674,7 +2681,7 @@ void method_2d(u32 sub, u32 mm, u32 arg) {
 bool report(u32 type, u32 ea) {
     if (type != 1 || !g_vk_ok) return false;   // CELL_GCM_ZPASS_PIXEL_CNT
     if (g_q.enabled) { q_end(); q_begin(); }    // the report covers everything drawn so far
-    g_zpass.pending.push_back({ea, g_zpass.spans, g_serial});
+    g_zpass.pending.push_back({ea, g_zpass.spans, g_serial, g_frame});
     return true;
 }
 
@@ -2699,7 +2706,7 @@ void method(u32 m, u32 arg) {
     m &= 0xFFFC;
     static const auto special = [] {
         std::array<bool, 0x800> t{};
-        for (u32 x : {0x1D7Cu, 0x1D84u, 0x17C8u, 0x1E9Cu, 0x1EFCu, 0x1D94u, 0x1808u, 0x1814u, 0x1824u}) t[x >> 2] = true;
+        for (u32 x : {0x17CCu, 0x17C8u, 0x1E9Cu, 0x1EFCu, 0x1D94u, 0x1808u, 0x1814u, 0x1824u}) t[x >> 2] = true;
         for (u32 x = 0x0B80; x < 0x0C00; x += 4) t[x >> 2] = true;
         for (u32 x = 0x1F00; x < 0x1F80; x += 4) t[x >> 2] = true;
         return t;
@@ -2713,7 +2720,7 @@ void method(u32 m, u32 arg) {
         g_upload_words = upload_words;
         g_plain_on = true;
     }
-    if (m == 0x1D7C) { R[m >> 2] = arg; zpass_enable(arg & 1); return; }   // ANTI_ALIASING_CONTROL / ZPASS_PIXEL_COUNT_ENABLE
+    if (m == 0x17CC) { R[m >> 2] = arg; zpass_enable(arg & 1); return; }   // ZPASS_PIXEL_COUNT_ENABLE (rsx_gl.cpp: not 0x1D7C)
     if (m == 0x17C8 && arg == 1) {                                         // CLEAR_REPORT_VALUE (ZPASS_PIXEL_CNT)
         bool on = g_q.enabled;
         zpass_enable(false);
@@ -2817,6 +2824,14 @@ void flip(u32 ea, u32 pitch, u32 width, u32 height) {
     }
     static u64 flip_serial[2] = {};   // at most two frames in flight
     wait_serial(flip_serial[1]);
+    // occlusion reports of this frame are written now, as OpenGL does: the game reads each one two frames later from a
+    // ring of three (0x42D6F0, query slots handed out in draw order), and values that arrived a frame or two late were
+    // read as another object's count from three frames before (F1CE_ZPASS_PRECISE=0: the old late, non-blocking writes)
+    static const bool precise = !getenv("F1CE_ZPASS_PRECISE") || atoi(getenv("F1CE_ZPASS_PRECISE")) != 0;
+    if (precise && !g_zpass.pending.empty()) {
+        wait_serial(g_zpass.pending.back().serial);
+        zpass_resolve();
+    }
     tp[4] = time_usec();
     if (tp[4] - g_flip_t0 > 25000 && tp[3]) {   // debug: where a slow flip went (not a vsync wait of up to one refresh)
         static int n = 0;
