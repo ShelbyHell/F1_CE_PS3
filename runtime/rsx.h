@@ -2,6 +2,9 @@
 #pragma once
 #include "ppu_runtime.h"
 
+#include <atomic>
+#include <string>
+
 namespace rsx {
 extern u64 g_last_frame_draws;   // draws of the frame shown last
 // output format, hle_aspect.cpp
@@ -31,4 +34,16 @@ void init();
 void method(u32 method, u32 arg);                               // NV4097 state / draw methods
 void flip(u32 ea, u32 pitch, u32 width, u32 height);            // present a display buffer
 bool report(u32 type, u32 ea);   // NV4097_GET_REPORT value for `type` at ea (+8); false = not handled here
+// Occlusion reports whose count the GPU has not given yet (rsx.cpp). The renderers write them in order when their
+// queries are done, without waiting at the flip; the game reads a frame's reports two frames later, and before that
+// read (wait_reports at cellGcmSetFlip, hle_gcm.cpp) waits for the reports of that frame only.
+enum class ZpassMode { lazy, late, flip };   // F1CE_ZPASS_PRECISE: unset = lazy, 0 = late (never waited for), flip
+ZpassMode zpass_mode();
+extern std::atomic<u64> g_frames_done;   // flips the RSX ran: a report's frame is this count when it is issued
+void report_issued();    // RSX thread, in the order the reports are written later
+void report_written();
+extern std::atomic<u64> g_report_oldest;   // frame of the oldest report not written yet (~0: none)
+extern std::atomic<u64> g_report_want;     // the PPU waits for the reports of frames before this (0: none)
+void zpass_service();   // RSX thread, at its waits and draws: writes the wanted reports (blocking on their queries)
+std::string mem_report();   // the "rsx mem:" line: what the renderer caches hold (RSX thread only)
 }  // namespace rsx

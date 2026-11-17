@@ -122,6 +122,9 @@ u32 ilog2(u32 v);
 // 2 = quarter size). Textures without mips, linear, main-memory or texel-addressed ones (format bits 0x20/0x40) keep
 // their size, and the remaining level 0 keeps at least 32 texels on its short side.
 u32 tex_levels_dropped(u32 w, u32 h, u32 levels, u32 fmt, bool main_mem);
+// Called every 60 frames: the frame at which textures (and Vulkan render targets) still unused count as unused for
+// longer than F1CE_TEX_EVICT_S seconds (default 180, longer than a lap; 0 = never), or 0 when none do yet
+u64 evict_cutoff_frame();
 u32 tex_level_bytes(u32 w, u32 h, u32 level, u32 base_fmt, u32 bpp);   // guest size of a swizzled or DXT mip level
 u32 zpass_value(u32 ea, u64 samples);   // the occlusion count written to report ea for that many counted samples
 float half_to_float(u16 h);

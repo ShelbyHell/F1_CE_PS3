@@ -168,7 +168,7 @@ if(F1CE_HOST STREQUAL "SDL")
     target_include_directories(f1ce PRIVATE third_party/SDL3-3.4.18/src/video/khronos)   # Vulkan headers
   endif()
   if(WIN32)
-    target_link_libraries(f1ce PRIVATE opengl32 winmm synchronization shell32)
+    target_link_libraries(f1ce PRIVATE opengl32 winmm synchronization shell32 psapi dxgi)
   endif()
 endif()
 if(WIN32)

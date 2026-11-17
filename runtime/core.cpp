@@ -18,6 +18,8 @@
 #include <timeapi.h>
 #include <synchapi.h>
 #include <tlhelp32.h>
+#include <psapi.h>
+#include <dxgi1_4.h>
 #else
 #include <pthread.h>
 #include <sched.h>
@@ -446,6 +448,130 @@ u64 process_cpu_usec() {
 #else
     return (u64)(clock() / (double)CLOCKS_PER_SEC * 1e6);
 #endif
+}
+
+// RAM of the process for the "mem:" line: resident (working set) and committed (private) memory, how much of each guest
+// range is resident (sampled every 16th page; the ranges themselves are committed whole by mem::init, ~1.3 GB of the
+// private figure) and the video memory the GPU driver gives this process (DXGI: both renderers, local = VRAM, shared =
+// system RAM the GPU uses)
+std::string process_mem_report() {
+    static const struct { const char* name; u32 base, size; } ranges[] = {
+        {"main", 0x00010000, 0x11000000 - 0x10000}, {"heap", mem::MAIN_HEAP, mem::MAIN_HEAP_SIZE},
+        {"user", mem::USER_BASE, mem::USER_SIZE}, {"local", mem::RSX_LOCAL, mem::RSX_LOCAL_SIZE},
+        {"stacks", mem::STACK_BASE, mem::STACK_SIZE}};
+    constexpr u32 PAGE = 4096, STEP = 16;
+    std::string s;
+    char b[160];
+#ifdef _WIN32
+    PROCESS_MEMORY_COUNTERS_EX pmc{};
+    pmc.cb = sizeof(pmc);
+    if (!GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc))) return "unavailable";
+    snprintf(b, sizeof(b), "working set %.0f MB (peak %.0f), private %.0f MB (peak %.0f)", pmc.WorkingSetSize / 1048576.0,
+             pmc.PeakWorkingSetSize / 1048576.0, pmc.PrivateUsage / 1048576.0, pmc.PeakPagefileUsage / 1048576.0);
+    s = b;
+    static std::vector<PSAPI_WORKING_SET_EX_INFORMATION> q;
+    double guest = 0;
+    std::string per;
+    for (const auto& r : ranges) {
+        const u32 n = r.size / PAGE / STEP;
+        q.resize(n);
+        for (u32 i = 0; i < n; i++) q[i].VirtualAddress = gmem(r.base + i * PAGE * STEP);
+        if (!QueryWorkingSetEx(GetCurrentProcess(), q.data(), (DWORD)(n * sizeof(q[0])))) return s;
+        u32 res = 0;
+        for (u32 i = 0; i < n; i++) res += q[i].VirtualAttributes.Valid;
+        const double mb = (double)res * STEP * PAGE / 1048576.0;
+        guest += mb;
+        snprintf(b, sizeof(b), " %s %.0f", r.name, mb);
+        per += b;
+    }
+    snprintf(b, sizeof(b), " | guest resident ~%.0f MB (%s), host ~%.0f MB", guest, per.c_str() + 1,
+             pmc.WorkingSetSize / 1048576.0 - guest);
+    s += b;
+    static IDXGIFactory1* factory = [] {
+        IDXGIFactory1* f = nullptr;
+        return SUCCEEDED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void**)&f)) ? f : nullptr;
+    }();
+    // debug: F1CE_MEM_HEAPS=1 walks every heap of the process (slow: a hitch per line): bytes in use per heap (the CRT's
+    // is the process heap) and its allocation sizes that hold the most bytes
+    static const bool heaps = getenv("F1CE_MEM_HEAPS") != nullptr;
+    if (heaps) {
+        HANDLE hs[64];
+        const DWORD nh = std::min<DWORD>(GetProcessHeaps(64, hs), 64);
+        for (DWORD i = 0; i < nh; i++) {
+            std::map<size_t, std::pair<u64, u64>> by_size;   // rounded size -> count, bytes
+            u64 busy = 0, regions = 0;
+            PROCESS_HEAP_ENTRY e{};
+            if (!HeapLock(hs[i])) continue;
+            while (HeapWalk(hs[i], &e)) {
+                if (e.wFlags & PROCESS_HEAP_REGION) regions += e.Region.dwCommittedSize;
+                else if (e.wFlags & PROCESS_HEAP_ENTRY_BUSY) {
+                    busy += e.cbData;
+                    const size_t sz = e.cbData < 256 ? (e.cbData + 15) & ~15u : (size_t)1 << (64 - __builtin_clzll(e.cbData - 1));
+                    by_size[sz].first++;
+                    by_size[sz].second += e.cbData;
+                }
+            }
+            HeapUnlock(hs[i]);
+            if (busy < (8u << 20)) continue;
+            std::vector<std::pair<u64, size_t>> top;
+            for (auto& [sz, cb] : by_size) top.push_back({cb.second, sz});
+            std::sort(top.rbegin(), top.rend());
+            std::string t;
+            for (size_t k = 0; k < top.size() && k < 8; k++) {
+                snprintf(b, sizeof(b), " <=%zu: %.0f MB x%llu", top[k].second, top[k].first / 1048576.0,
+                         (unsigned long long)by_size[top[k].second].first);
+                t += b;
+            }
+            LOG_I("mem heap %p%s: %.0f MB in use, %.0f MB committed |%s", hs[i], hs[i] == GetProcessHeap() ? " (process)" : "",
+                  busy / 1048576.0, regions / 1048576.0, t.c_str());
+        }
+    }
+    IDXGIAdapter1* a = nullptr;
+    for (UINT i = 0; factory && factory->EnumAdapters1(i, &a) == S_OK; i++) {
+        IDXGIAdapter3* a3 = nullptr;
+        if (SUCCEEDED(a->QueryInterface(__uuidof(IDXGIAdapter3), (void**)&a3))) {
+            DXGI_QUERY_VIDEO_MEMORY_INFO lo{}, nl{};
+            a3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &lo);
+            a3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &nl);
+            if (lo.CurrentUsage + nl.CurrentUsage >= (16u << 20)) {   // (the adapters the game does not render on)
+                snprintf(b, sizeof(b), " | gpu %u: local %.0f MB (budget %.0f), shared %.0f MB", i, lo.CurrentUsage / 1048576.0,
+                         lo.Budget / 1048576.0, nl.CurrentUsage / 1048576.0);
+                s += b;
+            }
+            a3->Release();
+        }
+        a->Release();
+    }
+#else
+    long rss = 0, hwm = 0, anon = 0;
+    if (FILE* f = fopen("/proc/self/status", "r")) {
+        char line[256];
+        while (fgets(line, sizeof(line), f)) {
+            sscanf(line, "VmRSS: %ld", &rss);
+            sscanf(line, "VmHWM: %ld", &hwm);
+            sscanf(line, "RssAnon: %ld", &anon);
+        }
+        fclose(f);
+    }
+    snprintf(b, sizeof(b), "resident %.0f MB (peak %.0f, anonymous %.0f)", rss / 1024.0, hwm / 1024.0, anon / 1024.0);
+    s = b;
+    static std::vector<unsigned char> v;
+    double guest = 0;
+    std::string per;
+    for (const auto& r : ranges) {
+        v.resize(r.size / PAGE);
+        if (mincore(gmem(r.base), r.size, v.data())) return s;
+        u32 res = 0;
+        for (size_t i = 0; i < v.size(); i += STEP) res += v[i] & 1;
+        const double mb = (double)res * STEP * PAGE / 1048576.0;
+        guest += mb;
+        snprintf(b, sizeof(b), " %s %.0f", r.name, mb);
+        per += b;
+    }
+    snprintf(b, sizeof(b), " | guest resident ~%.0f MB (%s), host ~%.0f MB", guest, per.c_str() + 1, rss / 1024.0 - guest);
+    s += b;
+#endif
+    return s;
 }
 u64 ppu_timebase() {  // 79.8 MHz
     auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - g_start).count();

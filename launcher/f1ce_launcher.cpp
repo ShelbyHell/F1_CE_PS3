@@ -93,8 +93,8 @@ Combo g_combos[] = {
      0, REFLECT},
     // fewer reflection updates save CPU time (runtime/hle_cubemap.cpp)
     {L"Updates", L"F1CE_CUBE_HZ",
-     {{L"30 per second (original)", nullptr}, {L"Every frame", L"0"}, {L"20 per second", L"20"}, {L"15 per second", L"15"},
-      {L"10 per second", L"10"}}, 0, REFLECT},
+     {{L"30 per second (original)", nullptr}, {L"Every frame", L"0"}, {L"Every frame, 3 faces at a time", L"half"},
+      {L"20 per second", L"20"}, {L"15 per second", L"15"}, {L"10 per second", L"10"}}, 0, REFLECT},
     // the cube map faces (256x256 targets), like the shadow maps (runtime/hle_aspect.cpp)
     {L"Resolution", L"F1CE_CUBE_RES",
      {{L"64x64 (very low)", L"0.25"}, {L"128x128 (low)", L"0.5"}, {L"256x256 (medium, original)", L"1"},

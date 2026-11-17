@@ -199,9 +199,10 @@ std::vector<Option> make_options() {
                        "Live: the cars reflect the scene as they move. Static: the scene at the start, kept until the "
                        "next one. Off: a plain sheen. Static and Off save CPU time; the options below are for Live."));
     v.push_back(choice(VIDEO, "Updates", "F1CE_CUBE_HZ",
-                       {{"30 per second (original)", nullptr}, {"Every frame", "0"}, {"20 per second", "20"},
-                        {"15 per second", "15"}, {"10 per second", "10"}},
-                       0, "How often the cars' reflections are drawn again. Fewer updates save CPU time."));
+                       {{"30 per second (original)", nullptr}, {"Every frame", "0"}, {"Every frame, 3 faces at a time", "half"},
+                        {"20 per second", "20"}, {"15 per second", "15"}, {"10 per second", "10"}},
+                       0, "How often the cars' reflections are drawn again. Fewer updates save CPU time. \"3 faces at a "
+                          "time\" draws every frame but only half of the reflection map, alternating: smooth and cheaper."));
     v.push_back(choice(VIDEO, "Resolution", "F1CE_CUBE_RES",
                        {{"64x64 (very low)", "0.25"}, {"128x128 (low)", "0.5"}, {"256x256 (original)", "1"},
                         {"Internal resolution", nullptr}, {"512x512 (high)", "2"}},

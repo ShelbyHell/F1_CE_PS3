@@ -797,9 +797,11 @@ std::string shader_cache_dir() {
         if (const char* e = getenv("F1CE_CACHE_DIR"); e && *e) d = e;
         else {
 #ifdef _WIN32
-            char path[MAX_PATH];
-            DWORD n = GetModuleFileNameA(nullptr, path, MAX_PATH);
-            std::string s = n && n < MAX_PATH ? std::string(path, n) : std::string();
+            // UTF-8 like every other path: the ANSI name of a folder such as "Další hry" is not valid UTF-8 and
+            // made u8path() below throw (uncaught: exit 0xC0000409 at the first frame)
+            wchar_t path[MAX_PATH];
+            DWORD n = GetModuleFileNameW(nullptr, path, MAX_PATH);
+            std::string s = n && n < MAX_PATH ? PATH_STR(std::filesystem::path(std::wstring(path, n))) : std::string();
 #else
             std::error_code ec;
             std::string s = std::filesystem::read_symlink("/proc/self/exe", ec).string();
@@ -840,15 +842,16 @@ u64 hash_fp(u32 ea, u32& size_out) {
 // Program database (shader_cache/programs.bin): the guest microcode of every program pair the game has used (vertex
 // program slots, fragment program bytes, shader control, cube mask). At start-up, before the renderer runs its first
 // command, every entry is translated again with the current translator and its GL program is loaded from the binary
-// cache or compiled, with a progress bar in the window: programs are never compiled or loaded during play any more
-// (stutter, white screens while a new screen's programs compiled), also after a translator change or a new scale.
+// cache or compiled, with a progress bar in the window: programs are never compiled during play any more (stutter,
+// white screens while a new screen's programs compiled), also after a translator change or a new scale. (OpenGL then
+// drops them and loads each binary when first drawn, to save RAM: keep_programs in rsx_gl.cpp.)
 // Programs the game has never used before are still compiled once when they first appear, and recorded.
 std::set<u64> g_db_keys;   // program pairs in the database (vh * 31 + fh)
 bool g_db_loaded = false;
 
 void db_record(u32 vp_start, u32 vp_len, u32 fp_ea, u32 fp_size, u32 shader_control, u32 cube_mask, u64 vh, u64 fh) {
     if (!g_db_loaded || !g_db_keys.insert(vh * 31 + fh).second || fp_size == 0 || fp_size > 65536) return;
-    FILE* f = fopen((shader_cache_dir() + "/programs.bin").c_str(), "ab");
+    FILE* f = fopen_u8((shader_cache_dir() + "/programs.bin").c_str(), "ab");
     if (!f) return;
     ProgRecord r{PROG_MAGIC, vp_start, vp_len, fp_ea, fp_size, shader_control, cube_mask, 0, vh, fh};
     fwrite(&r, sizeof(r), 1, f);
@@ -862,7 +865,7 @@ void db_record(u32 vp_start, u32 vp_len, u32 fp_ea, u32 fp_size, u32 shader_cont
 std::vector<ProgEntry> load_program_db() {
     g_db_loaded = true;
     std::vector<ProgEntry> entries;
-    FILE* f = fopen((shader_cache_dir() + "/programs.bin").c_str(), "rb");
+    FILE* f = fopen_u8((shader_cache_dir() + "/programs.bin").c_str(), "rb");
     if (!f) { LOG_I("rsx: no program database yet (shader_cache/programs.bin)"); return entries; }
     for (;;) {
         ProgEntry e;
@@ -1036,6 +1039,17 @@ u32 morton(u32 x, u32 y, u32 log_w, u32 log_h) {
 }
 
 u32 ilog2(u32 v) { u32 r = 0; while ((1u << r) < v) r++; return r; }
+
+u64 evict_cutoff_frame() {
+    static const u64 limit = [] { const char* e = getenv("F1CE_TEX_EVICT_S"); return (e ? strtoull(e, nullptr, 10) : 180ull) * 1000000ull; }();
+    if (!limit) return 0;
+    static std::deque<std::pair<u64, u64>> marks;   // (frame, time) of each call
+    const u64 now = time_usec();
+    marks.push_back({g_frame, now});
+    u64 cutoff = 0;
+    while (!marks.empty() && now - marks.front().second > limit) { cutoff = marks.front().first; marks.pop_front(); }
+    return cutoff;
+}
 
 u32 tex_levels_dropped(u32 w, u32 h, u32 levels, u32 fmt, bool main_mem) {
     static const u32 want = getenv("F1CE_TEX_RES") ? (u32)std::clamp(atoi(getenv("F1CE_TEX_RES")), 0, 4) : 0;

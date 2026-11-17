@@ -178,6 +178,7 @@ u32 event_queue_create_host(u64 key, u32 size);
 // UTF-8 std::string from a path (C++20 u8string() returns std::u8string).
 #define PATH_STR(p) ([](const auto& _p) { auto _s = _p.u8string(); return std::string(_s.begin(), _s.end()); }(p))
 std::string fs_host_path(const std::string& guest_path);
+FILE* fopen_u8(const std::string& path, const char* mode);   // fopen of a UTF-8 path (plain fopen is ANSI on Windows)
 extern std::string g_game_dir;   // .../PS3_GAME
 extern std::string g_data_dir;   // writable emulated dev_hdd0 etc.
 
@@ -206,6 +207,7 @@ void sleep_until_precise(u64 t);   // core.cpp: until time_usec() == t, without 
 void raise_thread_priority(bool highest = false);   // core.cpp: threads on the frame's critical path (F1CE_PRIO=0: off)
 void lower_thread_priority(int nice);               // core.cpp: background threads, Linux only (F1CE_PRIO=0: off)
 u64 process_cpu_usec();   // user + kernel time of all threads
+std::string process_mem_report();   // core.cpp: resident / committed RAM, guest share, GPU memory (the "mem:" line)
 // Wait of a polling thread with nothing to do: short waits (they spin, for latency) until it has been idle for 3 ms, then
 // a real sleep. Under load the idle spells are shorter, so the 1 ms of latency only applies in menus and pauses.
 inline void idle_wait(u64& idle_since, u64 short_us) {

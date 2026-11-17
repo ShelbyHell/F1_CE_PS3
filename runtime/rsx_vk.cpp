@@ -47,6 +47,7 @@
 extern u64 g_rsx_idle_us;   // hle_gcm.cpp: time the FIFO reader waited for commands (profiling)
 namespace rsx {
 namespace vk {
+void zpass_service();
 bool glsl_to_spirv(int stage, const std::string& src, std::vector<u32>& spirv, std::string& log);   // rsx_vk_spirv.cpp
 
 namespace {
@@ -207,14 +208,17 @@ struct Ring {
     Buffer b;
     u32 base = 0, seg = 0, nseg = 0, pos = 0;   // base: start of the ring in the buffer
     u64 serial[16] = {};
+    u64 frame_bytes = 0, peak_bytes = 0, waits = 0;   // usage for "rsx mem:" (peak = one frame's bytes)
 };
 u8* ring_take(Ring& r, u32 bytes, u32 align, ptrdiff_t* off) {
     if (bytes > r.seg) return nullptr;
     u32 pos = (r.pos + align - 1) & ~(align - 1);
     u32 s = pos / r.seg;
+    r.frame_bytes += bytes;
     if (s >= r.nseg || (pos + bytes - 1) / r.seg != s) {
         u32 cur = std::min(s, r.nseg - 1), next = (cur + 1) % r.nseg;
         r.serial[cur] = g_serial;
+        if (r.serial[next] > g_completed) r.waits++;   // the GPU still reads the next segment: the ring is too small
         if (r.serial[next]) {
             u64 tw = time_usec();
             wait_serial(r.serial[next]);
@@ -229,13 +233,16 @@ u8* ring_take(Ring& r, u32 bytes, u32 align, ptrdiff_t* off) {
     return r.b.ptr + r.base + pos;
 }
 
-// Image memory: chunks of device memory divided with the block heap (a process may hold only ~4000 allocations)
-struct Chunk { VkDeviceMemory mem; BlockHeap heap; u32 type; };
+// Image memory: chunks of device memory divided with the block heap (a process may hold only ~4000 allocations).
+// 64 MB chunks, an image larger than that getting a chunk of its own: the AMD Windows driver charges device memory to
+// the process's committed RAM too, and 256 MB chunks left ~250 MB unused in the race. Empty chunks are released
+// (evict_textures).
+struct Chunk { VkDeviceMemory mem; BlockHeap heap; u32 type, idle = 0; };
 std::vector<std::unique_ptr<Chunk>> g_chunks;
 struct ImgMem { Chunk* chunk = nullptr; u32 block = 0, bytes = 0; VkDeviceSize off = 0; };
 ImgMem img_alloc(const VkMemoryRequirements& mr) {
-    constexpr u32 CHUNK = 256u << 20;
-    if (mr.size + mr.alignment > CHUNK) fatal("image too large");
+    constexpr u32 CHUNK = 64u << 20;
+    if (mr.size + mr.alignment > (2048ull << 20)) fatal("image too large");
     u32 type = mem_type(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
     if (type == ~0u) fatal("no memory type for an image");
     u32 bytes = (u32)(mr.size + mr.alignment), block = ~0u;
@@ -246,18 +253,19 @@ ImgMem img_alloc(const VkMemoryRequirements& mr) {
         if (block != ~0u) { c = ch.get(); break; }
     }
     if (!c) {
+        const u32 size = std::max(CHUNK, (bytes + (1u << 20) - 1) & ~((1u << 20) - 1));
         auto ch = std::make_unique<Chunk>();
         VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-        ai.allocationSize = CHUNK;
+        ai.allocationSize = size;
         ai.memoryTypeIndex = type;
         check(vkAllocateMemory(g_dev, &ai, nullptr, &ch->mem), "vkAllocateMemory (images)");
         ch->type = type;
-        ch->heap.size = CHUNK;
-        heap_insert_free(ch->heap, 0, CHUNK);
+        ch->heap.size = size;
+        heap_insert_free(ch->heap, 0, size);
         block = heap_alloc(ch->heap, bytes);
         c = ch.get();
         g_chunks.push_back(std::move(ch));
-        LOG_I("rsx: image memory chunk %zu", g_chunks.size());
+        LOG_I("rsx: image memory chunk %zu (%u MB)", g_chunks.size(), size >> 20);
     }
     ImgMem m;
     m.chunk = c;
@@ -443,7 +451,7 @@ struct Surface {
     u32 offset = 0, width = 0, height = 0, format = 0;
     Img* tex = nullptr;
     Img* attached_depth = nullptr;
-    u64 last_use = 0;
+    u64 last_use = 0, last_read = 0;   // frames: last drawn into / copied to, last sampled
     u64 mem_sig = 0, sig_checked = ~0ull;   // (see rsx_gl.cpp)
     u32 sig_bytes = 0;
     bool stale = false;
@@ -463,6 +471,7 @@ struct DepthSurface {
     float scale_x = 1, scale_y = 1;   // (those of the colour targets it is used with)
     Img* tex = nullptr;
     u64 write_seq = 0;
+    u64 last_use = 0, last_read = 0;
 };
 u64 g_write_seq = 0, g_square_write_seq = 0;
 DepthSurface* g_cur_depth = nullptr;
@@ -615,6 +624,7 @@ DepthSurface* get_depth(u32 offset, u32 w, u32 h) {
         clear_new(d.tex);
         LOG_I("rsx: depth surface %08x %ux%u", offset, w, h);
     }
+    d.last_use = g_frame;
     return &d;
 }
 
@@ -856,7 +866,7 @@ VkShaderModule shader_module(int stage, const std::string& src) {
     char path[512];
     snprintf(path, sizeof(path), "%s/%016llx.spv", vk_cache_dir().c_str(), (unsigned long long)key);
     std::vector<u32> spv;
-    if (FILE* f = fopen(path, "rb")) {
+    if (FILE* f = fopen_u8(path, "rb")) {
         fseek(f, 0, SEEK_END);
         long n = ftell(f);
         fseek(f, 0, SEEK_SET);
@@ -869,7 +879,7 @@ VkShaderModule shader_module(int stage, const std::string& src) {
             LOG_E("rsx: GLSL to SPIR-V failed:\n%s\n--- source ---\n%s", log.c_str(), src.c_str());
             return 0;
         }
-        if (FILE* f = fopen(path, "wb")) { fwrite(spv.data(), 4, spv.size(), f); fclose(f); }
+        if (FILE* f = fopen_u8(path, "wb")) { fwrite(spv.data(), 4, spv.size(), f); fclose(f); }
     }
     VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     ci.codeSize = spv.size() * 4;
@@ -987,11 +997,12 @@ void save_pipeline_cache() {
     std::vector<u8> d(n);
     if (vkGetPipelineCacheData(g_dev, g_pcache, &n, d.data()) != VK_SUCCESS) return;
     std::string tmp = vk_cache_dir() + "/pipelines.tmp", path = vk_cache_dir() + "/pipelines.bin";
-    if (FILE* f = fopen(tmp.c_str(), "wb")) {
+    if (FILE* f = fopen_u8(tmp.c_str(), "wb")) {
         fwrite(d.data(), 1, n, f);
         fclose(f);
-        remove(path.c_str());
-        rename(tmp.c_str(), path.c_str());
+        std::error_code ec;
+        std::filesystem::remove(std::filesystem::u8path(path), ec);
+        std::filesystem::rename(std::filesystem::u8path(tmp), std::filesystem::u8path(path), ec);
     }
     g_pcache_dirty = false;
 }
@@ -1105,6 +1116,10 @@ std::deque<std::pair<u64, u64>> g_frame_serials;   // frame -> serial of its las
 
 // blocks freed by frames the GPU has finished
 void heaps_end_frame() {
+    for (Ring* r : {&g_ring, &g_uring, &g_sring, &g_iring}) {
+        r->peak_bytes = std::max(r->peak_bytes, r->frame_bytes);
+        r->frame_bytes = 0;
+    }
     g_frame_serials.push_back({g_frame, g_serial});
     while (!g_frame_serials.empty() && g_frame_serials.front().second <= g_completed) {
         g_heap.done_frame = g_iheap.done_frame = g_frame_serials.front().first;
@@ -1204,6 +1219,7 @@ Img* upload_texture(u32 unit, bool* is_surface, int* depth_func) {
         if (depth_format && dit != g_depths.end() && dit->second.tex) {
             *is_surface = true;
             *depth_func = (int)((reg(base + 8) >> 28) & 7) + 1;
+            dit->second.last_read = g_frame;
             resolve_for(dit->second.tex);
             return dit->second.tex;
         }
@@ -1212,6 +1228,7 @@ Img* upload_texture(u32 unit, bool* is_surface, int* depth_func) {
             (it == g_surfaces.end() || !it->second.tex || dit->second.write_seq > it->second.write_seq)) {
             *is_surface = true;
             *depth_func = 9;
+            dit->second.last_read = g_frame;
             resolve_for(dit->second.tex);
             return dit->second.tex;
         }
@@ -1227,6 +1244,7 @@ Img* upload_texture(u32 unit, bool* is_surface, int* depth_func) {
         if (it != g_surfaces.end() && it->second.tex && !it->second.stale) {
             *is_surface = true;
             if (base_fmt == 0x81) *depth_func = 12;
+            it->second.last_read = g_frame;
             resolve_for(it->second.tex);
             return it->second.tex;
         }
@@ -1316,6 +1334,66 @@ Img* upload_texture(u32 unit, bool* is_surface, int* depth_func) {
     return te.tex;
 }
 
+// Textures no draw has used for 3 minutes (evict_cutoff_frame) are released, and image chunks left empty with them:
+// without this every track loaded kept its textures in video memory until exit. A texture used again is uploaded anew.
+void evict_textures() {
+    // chunks empty on two passes in a row (images are freed once the GPU is done with them)
+    for (size_t i = g_chunks.size(); i-- > 1;) {
+        Chunk& ch = *g_chunks[i];
+        ch.idle = ch.heap.used ? 0 : ch.idle + 1;
+        if (ch.idle < 2) continue;
+        vkFreeMemory(g_dev, ch.mem, nullptr);
+        LOG_I("rsx: image memory chunk of %u MB released (%zu left)", ch.heap.size >> 20, g_chunks.size() - 1);
+        g_chunks.erase(g_chunks.begin() + i);
+    }
+    const u64 cutoff = evict_cutoff_frame();
+    if (!cutoff) return;
+    u32 n = 0;
+    double bytes = 0;
+    for (auto it = g_textures.begin(); it != g_textures.end();) {
+        if (it->second.checked_frame < cutoff || it->second.checked_frame == ~0ull) {
+            if (it->second.tex) { bytes += it->second.tex->mem.bytes; destroy_image(it->second.tex); n++; }
+            it = g_textures.erase(it);
+        } else ++it;
+    }
+    if (n) LOG_I("rsx: released %u textures unused since frame %llu (%.0f MB)", n, (unsigned long long)cutoff, bytes / 1048576.0);
+    // Render targets neither drawn into nor sampled for as long (the menu's garage scene and its cube map during a
+    // race, ~50 MB at scale 2): one used again starts cleared, as a new one does. Main-memory targets (written back to
+    // the guest) and depth images still attached to a colour target stay.
+    n = 0;
+    bytes = 0;
+    auto unused = [&](u64 drawn, u64 read) { return std::max(drawn, read) < cutoff; };
+    auto drop = [&](Img*& im) { if (im) { bytes += im->mem.bytes; destroy_image(im); im = nullptr; } };
+    std::set<Img*> attached;
+    for (auto& [k, s] : g_surfaces) if (s.attached_depth) attached.insert(s.attached_depth);
+    for (auto it = g_surfaces.begin(); it != g_surfaces.end();) {
+        Surface& s = it->second;
+        if (s.main_ea || !unused(s.last_use, s.last_read)) { ++it; continue; }
+        drop(s.tex); drop(s.ms_color); drop(s.ms_depth);
+        g_ms_surfaces.erase(std::remove(g_ms_surfaces.begin(), g_ms_surfaces.end(), it->first), g_ms_surfaces.end());
+        g_surf_epoch++;
+        n++;
+        it = g_surfaces.erase(it);
+    }
+    for (auto it = g_surface_spares.begin(); it != g_surface_spares.end();) {
+        Surface& s = it->second;
+        if (s.main_ea || !unused(s.last_use, s.last_read)) { ++it; continue; }
+        drop(s.tex); drop(s.ms_color); drop(s.ms_depth);
+        n++;
+        it = g_surface_spares.erase(it);
+    }
+    for (auto it = g_depths.begin(); it != g_depths.end();) {
+        DepthSurface& d = it->second;
+        if (!unused(d.last_use, d.last_read) || attached.count(d.tex)) { ++it; continue; }
+        if (g_cur_depth == &d) g_cur_depth = nullptr;
+        drop(d.tex);
+        g_surf_epoch++;
+        n++;
+        it = g_depths.erase(it);
+    }
+    if (n) LOG_I("rsx: released %u render targets unused since frame %llu (%.0f MB)", n, (unsigned long long)cutoff, bytes / 1048576.0);
+}
+
 // Cube map of texture unit u: see cube_texture in rsx_gl.cpp
 std::set<u32> g_cube_faces;
 Img* cube_texture(u32 u) {
@@ -1344,6 +1422,7 @@ Img* cube_texture(u32 u) {
     for (u32 f = 0; f < 6; f++) {
         auto it = g_surfaces.find(offset + f * face_bytes);
         if (it == g_surfaces.end() || !it->second.tex || it->second.width != w || it->second.height != w) continue;
+        it->second.last_read = g_frame;
         if (it->second.write_seq == ce.seq[f]) continue;
         end_pass("cube copy");
         const s32 fw = (s32)(scaled(it->second.width, it->second.scale_x)), fh = (s32)(scaled(it->second.height, it->second.scale_y));
@@ -1566,6 +1645,7 @@ ptrdiff_t g_params_off = 0;
 u32 g_params_seg = ~0u;
 
 void draw(bool indexed) {
+    if (rsx::g_report_want.load(std::memory_order_relaxed)) zpass_service();   // the game waits for a report
     u64 t0 = prof_usec();
     Surface* target = bind_target();
     if (!target || cube_face_skipped(g_cube_faces, target->offset, g_frame)) return;
@@ -1840,6 +1920,7 @@ void zpass_resolve() {
         u64 total = 0;
         for (u64 id : p.spans) total += g_qres[id & (QRES - 1)];
         st32(p.ea + 8, zpass_value(p.ea, total));
+        rsx::report_written();
         static const bool zlog = getenv("F1CE_ZPASS_LOG") != nullptr;   // debug: frames between a report and its value
         if (zlog) {
             static u64 hist[5] = {}, n = 0;
@@ -1850,6 +1931,19 @@ void zpass_resolve() {
         g_zpass.pending.pop_front();
     }
 }
+
+}  // namespace
+// rsx::zpass_service: writes reports in order up to those the game waits for, waiting for the GPU where needed
+void zpass_service() {
+    const u64 want = rsx::g_report_want.load(std::memory_order_acquire);
+    if (!want || rsx::g_report_oldest.load(std::memory_order_relaxed) >= want) return;
+    zpass_resolve();
+    while (rsx::g_report_oldest.load(std::memory_order_relaxed) < want && !g_zpass.pending.empty()) {
+        wait_serial(g_zpass.pending.front().serial);
+        zpass_resolve();
+    }
+}
+namespace {
 
 // ------------------------------------------------------------------ command buffers
 // GPU busy time: each submission's span from its first command to its last, overlaps with the previous one left out.
@@ -2472,9 +2566,13 @@ void create_objects() {
         r.b = make_buffer((VkDeviceSize)seg * nseg + (64u << 10), usage, true, video);   // (a descriptor's range reaches past the last offset)
     };
     ring(g_ring, RING_SEG, 8, SSBO | VK_BUFFER_USAGE_TRANSFER_SRC_BIT, false);
-    ring(g_uring, 16u << 20, 16, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
-    ring(g_sring, 72u << 20, 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT | SSBO, false);
-    g_heap.size = 256u << 20;
+    // Sizes from the "rsx mem:" ring peaks (Silverstone race, scale 2): uniforms ~18 MB per frame, staging ~4 MB per frame
+    // in the race and up to ~90 MB in a track's load frame (that frame may wait for the GPU; uploads larger than a
+    // segment get their own buffer). With two frames in flight these leave room for 4-5 frames; they were 256 + 288 MB
+    // of host memory when the uniform ring is not in video memory (no resizable BAR).
+    ring(g_uring, 8u << 20, 12, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, true);
+    ring(g_sring, 32u << 20, 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT | SSBO, false);
+    g_heap.size = 128u << 20;   // (~25 MB in use in the Silverstone race)
     g_heap_buf = make_buffer(g_heap.size, SSBO | VK_BUFFER_USAGE_TRANSFER_DST_BIT, false, false);
     heap_insert_free(g_heap, 0, g_heap.size);
     g_ibuf = make_buffer(IDX_SIZE, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, true, false);
@@ -2574,7 +2672,7 @@ void create_objects() {
     // pipeline cache from the last session
     VkPipelineCacheCreateInfo pci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
     std::vector<u8> cache;
-    if (FILE* f = fopen((vk_cache_dir() + "/pipelines.bin").c_str(), "rb")) {
+    if (FILE* f = fopen_u8((vk_cache_dir() + "/pipelines.bin").c_str(), "rb")) {
         fseek(f, 0, SEEK_END);
         long sz = ftell(f);
         fseek(f, 0, SEEK_SET);
@@ -2663,6 +2761,7 @@ void method_2d(u32 sub, u32 mm, u32 arg) {
     auto it = src_main ? g_surfaces.end() : g_surfaces.find(src);
     if (it == g_surfaces.end() || !it->second.tex || dst_main) return;
     Surface& s = it->second;
+    s.last_read = g_frame;
     u32 w = std::min(len / 4, s.width), h = std::min(lines, s.height);
     auto dit = g_surfaces.find(dst);
     Surface* d = dit != g_surfaces.end() && dit->second.tex ? &dit->second : get_surface(dst, w, h, s.format);
@@ -2683,6 +2782,7 @@ bool report(u32 type, u32 ea) {
     if (type != 1 || !g_vk_ok) return false;   // CELL_GCM_ZPASS_PIXEL_CNT
     if (g_q.enabled) { q_end(); q_begin(); }    // the report covers everything drawn so far
     g_zpass.pending.push_back({ea, g_zpass.spans, g_serial, g_frame});
+    rsx::report_issued();
     return true;
 }
 
@@ -2794,6 +2894,7 @@ void flip(u32 ea, u32 pitch, u32 width, u32 height) {
     }
     auto it = g_surfaces.find(offset);
     Surface* shown = it != g_surfaces.end() && it->second.tex ? &it->second : nullptr;
+    if (shown) shown->last_read = g_frame;
     if (host::dump_frame_due() && shown) {   // (the image is read back only for frames that are dumped)
         const u32 pw = scaled(shown->width, shown->scale_x), ph = scaled(shown->height, shown->scale_y);
         std::vector<u32> px((size_t)pw * ph), fl(px.size());
@@ -2825,11 +2926,11 @@ void flip(u32 ea, u32 pitch, u32 width, u32 height) {
     }
     static u64 flip_serial[2] = {};   // at most two frames in flight
     wait_serial(flip_serial[1]);
-    // occlusion reports of this frame are written now, as OpenGL does: the game reads each one two frames later from a
-    // ring of three (0x42D6F0, query slots handed out in draw order), and values that arrived a frame or two late were
-    // read as another object's count from three frames before (F1CE_ZPASS_PRECISE=0: the old late, non-blocking writes)
-    static const bool precise = !getenv("F1CE_ZPASS_PRECISE") || atoi(getenv("F1CE_ZPASS_PRECISE")) != 0;
-    if (precise && !g_zpass.pending.empty()) {
+    // occlusion reports: the game reads each one two frames later from a ring of three (0x42D6F0, query slots handed
+    // out in draw order), and values that arrived late were read as another object's count from three frames before.
+    // cellGcmSetFlip waits for the ones it will read (wait_reports in hle_gcm.cpp, rsx::g_report_want). F1CE_ZPASS_PRECISE=flip: all of
+    // this frame's are written here, as before (the RSX thread idled for the GPU's whole frame: race start 56 -> 39 fps)
+    if (rsx::zpass_mode() == rsx::ZpassMode::flip && !g_zpass.pending.empty()) {
         wait_serial(g_zpass.pending.back().serial);
         zpass_resolve();
     }
@@ -2919,7 +3020,46 @@ void flip(u32 ea, u32 pitch, u32 width, u32 height) {
         if (g_pcache_dirty) save_pipeline_cache();
     }
     evict_index_caches(60);
-    if (g_frame % 60 == 0) evict_raw_regions();
+    if (g_frame % 60 == 0) { evict_raw_regions(); evict_textures(); }
+}
+
+// "rsx mem:" (see rsx_gl.cpp): image sizes are their real allocations in the 256 MB device-local chunks
+std::string mem_report() {
+    auto bytes = [](const Img* im) { return im ? (double)im->mem.bytes : 0.0; };
+    double tex = 0, surf = 0, depth = 0, chunk_used = 0;
+    for (const auto& [k, t] : g_textures) tex += bytes(t.tex);
+    auto surface_bytes = [&](const Surface& s) { return bytes(s.tex) + bytes(s.ms_color) + bytes(s.ms_depth); };
+    for (const auto& [k, s] : g_surfaces) surf += surface_bytes(s);
+    for (const auto& [k, s] : g_surface_spares) surf += surface_bytes(s);
+    for (const auto& [k, d] : g_depths) depth += bytes(d.tex);
+    for (const auto& c : g_chunks) chunk_used += c->heap.used;
+    char b[320];
+    snprintf(b, sizeof(b), "textures %zu (%.0f MB), surfaces %zu + %zu spare (%.0f MB), depth %zu (%.0f MB), image chunks %zu (%.0f MB used), programs %zu, ",
+             g_textures.size(), tex / 1048576.0, g_surfaces.size(), g_surface_spares.size(), surf / 1048576.0, g_depths.size(),
+             depth / 1048576.0, g_chunks.size(), chunk_used / 1048576.0, g_programs.size());
+    // rings: size, largest frame since the last report, segments that were still in use when the ring reached them
+    std::string rings = " | rings MB (size/frame peak/waits):";
+    const std::pair<const char*, Ring*> rs[] = {{"vertex", &g_ring}, {"uniform", &g_uring}, {"staging", &g_sring}, {"index", &g_iring}};
+    for (const auto& [name, r] : rs) {
+        char t[96];
+        snprintf(t, sizeof(t), " %s %u/%.1f/%llu", name, (r->seg * r->nseg) >> 20, r->peak_bytes / 1048576.0, (unsigned long long)r->waits);
+        rings += t;
+        r->peak_bytes = 0;
+        r->waits = 0;
+    }
+    // F1CE_MEM_TARGETS=1: a "rsx target:" line per render target, its size and frames since it was last drawn into /
+    // sampled (-1 = never)
+    static const bool targets = getenv("F1CE_MEM_TARGETS") != nullptr;
+    if (targets) {
+        auto age = [](u64 f) { return f ? (long long)(g_frame - f) : -1ll; };
+        for (const auto& [k, s] : g_surfaces)
+            LOG_I("rsx target: colour %08x %ux%u %.1f MB, drawn %lld read %lld", k, s.width, s.height, surface_bytes(s) / 1048576.0, age(s.last_use), age(s.last_read));
+        for (const auto& [k, d] : g_depths)
+            LOG_I("rsx target: depth %08x %ux%u %.1f MB, drawn %lld read %lld", k, d.width, d.height, bytes(d.tex) / 1048576.0, age(d.last_use), age(d.last_read));
+        for (const auto& [k, s] : g_surface_spares)
+            LOG_I("rsx target: spare %08x %ux%u %.1f MB", s.offset, s.width, s.height, surface_bytes(s) / 1048576.0);
+    }
+    return b + shared_mem_report() + rings;
 }
 }  // namespace vk
 }  // namespace rsx

@@ -32,6 +32,7 @@
 extern u64 g_rsx_idle_us;   // hle_gcm.cpp: time the FIFO reader waited for commands (profiling)
 namespace rsx {
 namespace gl {
+void zpass_service();
 namespace {
 // ------------------------------------------------------------------ GL loader
 #define GL_FUNCS(X)                                                                                      \
@@ -504,20 +505,36 @@ u64 g_compile_us = 0, g_compiled = 0, g_cache_hits = 0, g_preload_hits = 0;
 std::mutex g_pre_m;
 std::unordered_map<u64, GLuint> g_preloaded;   // disk cache key -> linked program, ready for the render context
 std::set<u64> g_used_keys;                     // keys listed in used.txt (render thread only)
+std::vector<u64> g_used_order;                 // the same in the file's order
+
+// reads used.txt (at init, before the program database phase appends to it). Up to 0.4.1 the phase ran before this
+// and appended all its keys again at every start (430k lines for 2.6k keys after a few hundred runs): such a file is
+// written back without the repeats
+void load_used_keys() {
+    const std::string path = shader_cache_dir() + "/used.txt";
+    size_t lines = 0;
+    if (FILE* f = fopen_u8(path.c_str(), "r")) {
+        char line[64];
+        while (fgets(line, sizeof(line), f))
+            if (u64 k = strtoull(line, nullptr, 16)) {
+                lines++;
+                if (g_used_keys.insert(k).second) g_used_order.push_back(k);
+            }
+        fclose(f);
+    }
+    if (lines > g_used_order.size())
+        if (FILE* f = fopen_u8(path.c_str(), "w")) {
+            for (u64 k : g_used_order) fprintf(f, "%016llx\n", (unsigned long long)k);
+            fclose(f);
+            LOG_I("rsx: used.txt: %zu repeated keys removed (%zu left)", lines - g_used_order.size(), g_used_order.size());
+        }
+}
 
 void start_preload() {
     static bool started = false;
     if (started) return;
     started = true;
-    std::vector<u64> keys;
-    if (FILE* f = fopen((shader_cache_dir() + "/used.txt").c_str(), "r")) {
-        char line[64];
-        while (fgets(line, sizeof(line), f)) {
-            u64 k = strtoull(line, nullptr, 16);
-            if (k && g_used_keys.insert(k).second) keys.push_back(k);
-        }
-        fclose(f);
-    }
+    const std::vector<u64> keys = g_used_order;
     if (keys.empty() || getenv("F1CE_NO_PRELOAD")) return;
     void* ctx = host::gl_create_shared_context();
     if (!ctx) return;
@@ -535,7 +552,7 @@ void start_preload() {
         for (u64 k : keys) {
             char path[512];
             snprintf(path, sizeof(path), "%s/%016llx.bin", shader_cache_dir().c_str(), (unsigned long long)k);
-            FILE* f = fopen(path, "rb");
+            FILE* f = fopen_u8(path, "rb");
             if (!f) continue;
             u32 format = 0;
             std::vector<u8> bin;
@@ -660,7 +677,7 @@ bool start_compile_thread() {
                 if (len > 0) {
                     job->bin.resize((size_t)len);
                     glGetProgramBinary(prog, len, nullptr, &job->format, job->bin.data());
-                    if (FILE* f = fopen(job->path.c_str(), "wb")) { u32 fm = job->format; fwrite(&fm, 4, 1, f); fwrite(job->bin.data(), 1, job->bin.size(), f); fclose(f); }
+                    if (FILE* f = fopen_u8(job->path.c_str(), "wb")) { u32 fm = job->format; fwrite(&fm, 4, 1, f); fwrite(job->bin.data(), 1, job->bin.size(), f); fclose(f); }
                 }
             } else {
                 char log[4096] = {};
@@ -729,6 +746,16 @@ void progress_bar(double frac, const char* what) {
     g_tgt_valid = g_state_valid = false;
 }
 
+// F1CE_GL_PRELOAD=1: every program of the database stays linked for the whole session (the way up to 0.4.1). The AMD
+// driver keeps ~1.2 MB of RAM per linked program, 1.3 GB for the 1088 programs of the database while a race uses ~200,
+// so by default the phase only makes sure each program has a binary in the cache (compiled and stored if not) and
+// get_program loads it when first drawn: ~1.7 ms each, the first race frame took 0.2 s longer (2026-11-17)
+bool keep_programs() {
+    static const bool k = getenv("F1CE_GL_PRELOAD") && getenv("F1CE_GL_PRELOAD")[0] != '0';
+    return k;
+}
+
+u32 g_vp_gen = 1;   // bumped by every write to vp_words: the vertex program hash of the last draw stays valid until then
 void precompile_programs() {
     std::vector<ProgEntry> entries = load_program_db();
     if (entries.empty()) return;
@@ -744,6 +771,7 @@ void precompile_programs() {
         auto vit = vs_of.find(e.r.vh);
         if (vit == vs_of.end()) {
             memcpy(&vp_words[e.r.vp_start * 4], e.vp.data(), e.vp.size() * 4);
+            g_vp_gen++;
             vit = vs_of.emplace(e.r.vh, translate_vp(e.r.vp_start).glsl).first;
         }
         g_fp_override = e.fp.data(); g_fp_override_ea = e.r.fp_ea; g_fp_override_size = e.r.fp_size;
@@ -760,7 +788,9 @@ void precompile_programs() {
         GLint ok = 0;
         char path[512];
         snprintf(path, sizeof(path), "%s/%016llx.bin", shader_cache_dir().c_str(), (unsigned long long)key);
-        if (FILE* bf = fopen(path, "rb")) {   // binary cache
+        if (!keep_programs())
+            if (FILE* bf = fopen_u8(path, "rb")) { fclose(bf); glDeleteProgram(prog); loaded++; continue; }   // (loaded when drawn)
+        if (FILE* bf = fopen_u8(path, "rb")) {   // binary cache
             u32 format = 0;
             std::vector<u8> bin;
             if (fread(&format, 4, 1, bf) == 1) {
@@ -790,7 +820,7 @@ void precompile_programs() {
                     std::vector<u8> bin((size_t)len);
                     GLenum format = 0;
                     glGetProgramBinary(prog, len, nullptr, &format, bin.data());
-                    if (FILE* bf = fopen(path, "wb")) { u32 fm = format; fwrite(&fm, 4, 1, bf); fwrite(bin.data(), 1, bin.size(), bf); fclose(bf); }
+                    if (FILE* bf = fopen_u8(path, "wb")) { u32 fm = format; fwrite(&fm, 4, 1, bf); fwrite(bin.data(), 1, bin.size(), bf); fclose(bf); }
                 }
                 compiled++;
             }
@@ -799,26 +829,32 @@ void precompile_programs() {
             glDeleteShader(v);
             glDeleteShader(fr);
         }
-        if (!ok) { glDeleteProgram(prog); failed++; continue; }
+        if (!ok || !keep_programs()) { glDeleteProgram(prog); failed += !ok; continue; }
         std::lock_guard lk(g_pre_m);
         g_preloaded[key] = prog;
         if (!g_used_keys.count(key)) {
             g_used_keys.insert(key);
-            if (FILE* uf = fopen((shader_cache_dir() + "/used.txt").c_str(), "a")) { fprintf(uf, "%016llx\n", (unsigned long long)key); fclose(uf); }
+            if (FILE* uf = fopen_u8((shader_cache_dir() + "/used.txt").c_str(), "a")) { fprintf(uf, "%016llx\n", (unsigned long long)key); fclose(uf); }
         }
     }
     memcpy(vp_words, saved_vp.data(), saved_vp.size() * 4);
     progress_bar(1.0, "shaders");
-    LOG_I("rsx: program database: %zu programs ready in %.1f s (%u from the binary cache, %u compiled, %u failed)", entries.size(),
-          (time_usec() - t0) / 1e6, loaded, compiled, failed);
+    LOG_I("rsx: program database: %zu programs ready in %.1f s (%u from the binary cache, %u compiled, %u failed)%s", entries.size(),
+          (time_usec() - t0) / 1e6, loaded, compiled, failed, keep_programs() ? ", all kept linked (F1CE_GL_PRELOAD)" : ", loaded when first drawn");
 }
 
 Program* get_program(std::vector<float>& fp_consts) {
     u32 vp_start = reg(0x1EA0) & 511;
-    u32 vp_len = 0;
-    while (vp_start + vp_len < 512 && !(vp_words[(vp_start + vp_len) * 4 + 3] & 1)) vp_len++;
-    vp_len++;
-    u64 vh = hash_words(&vp_words[vp_start * 4], vp_len * 4);
+    static u32 memo_gen = 0, memo_start = 0, vp_len = 0;
+    static u64 vh = 0;
+    if (memo_gen != g_vp_gen || memo_start != vp_start) {
+        vp_len = 0;
+        while (vp_start + vp_len < 512 && !(vp_words[(vp_start + vp_len) * 4 + 3] & 1)) vp_len++;
+        vp_len++;
+        vh = hash_words(&vp_words[vp_start * 4], vp_len * 4);
+        memo_gen = g_vp_gen;
+        memo_start = vp_start;
+    }
 
     u32 fp_ctl = reg(0x08E4);
     u32 fp_ea = location_to_ea(fp_ctl & ~3u, (fp_ctl & 3) == 2);
@@ -901,7 +937,7 @@ Program* get_program(std::vector<float>& fp_consts) {
     }
     if (!g_used_keys.count(src_key)) {   // remembered for the next sessions' preload
         g_used_keys.insert(src_key);
-        if (FILE* f = fopen((shader_cache_dir() + "/used.txt").c_str(), "a")) { fprintf(f, "%016llx\n", (unsigned long long)src_key); fclose(f); }
+        if (FILE* f = fopen_u8((shader_cache_dir() + "/used.txt").c_str(), "a")) { fprintf(f, "%016llx\n", (unsigned long long)src_key); fclose(f); }
     }
     if (pre) {
         glDeleteProgram(p.prog);
@@ -909,7 +945,7 @@ Program* get_program(std::vector<float>& fp_consts) {
         ok = 1;
         g_cache_hits++;
         g_preload_hits++;
-    } else if (FILE* f = fopen(cache_path, "rb")) {
+    } else if (FILE* f = fopen_u8(cache_path, "rb")) {
         u32 format = 0;
         std::vector<u8> bin;
         if (fread(&format, 4, 1, f) == 1) {
@@ -966,7 +1002,7 @@ Program* get_program(std::vector<float>& fp_consts) {
                 std::vector<u8> bin((size_t)len);
                 GLenum format = 0;
                 glGetProgramBinary(p.prog, len, nullptr, &format, bin.data());
-                if (FILE* f = fopen(cache_path, "wb")) { u32 fm = format; fwrite(&fm, 4, 1, f); fwrite(bin.data(), 1, bin.size(), f); fclose(f); }
+                if (FILE* f = fopen_u8(cache_path, "wb")) { u32 fm = format; fwrite(&fm, 4, 1, f); fwrite(bin.data(), 1, bin.size(), f); fclose(f); }
             }
         }
         g_compiled++;
@@ -1053,6 +1089,20 @@ void evict_buffers() {
 
 struct TexEntry { GLuint tex = 0; u64 hash = 0; u32 w = 0, h = 0, fmt = 0; u64 checked_frame = ~0ull, last_change = 0; };
 std::unordered_map<u64, TexEntry> g_textures;
+// textures no draw has used for 3 minutes (evict_cutoff_frame; see rsx_vk.cpp): every track loaded used to keep its
+// textures until exit
+void evict_textures() {
+    const u64 cutoff = evict_cutoff_frame();
+    if (!cutoff) return;
+    u32 n = 0;
+    for (auto it = g_textures.begin(); it != g_textures.end();) {
+        if (it->second.checked_frame < cutoff || it->second.checked_frame == ~0ull) {
+            if (it->second.tex) { delete_tex(&it->second.tex); n++; }
+            it = g_textures.erase(it);
+        } else ++it;
+    }
+    if (n) LOG_I("rsx: released %u textures unused since frame %llu", n, (unsigned long long)cutoff);
+}
 
 
 // Texture decoding on the GPU (roadmap step 2): the raw level bytes go into a staging buffer texture and a compute
@@ -1694,6 +1744,7 @@ void apply_state() {
 }
 
 void draw(bool indexed) {
+    if (rsx::g_report_want.load(std::memory_order_relaxed)) zpass_service();   // the game waits for a report
     u64 t0 = prof_usec();
     if (g_no_state_cache) { g_tgt_valid = g_state_valid = false; g_cur_prog = 0; }
     Surface* target = bind_target();
@@ -2481,16 +2532,12 @@ static void gl_init_once() {
     iarena_init();
     // the PPU throttle gives up after 15 s; a cold program database takes longer and the game then rewrites the
     // command lists of frame 1 under the waiting RSX (guest memory fault), so it waits for the whole phase
+    load_used_keys();
     g_rsx_starting = true;
     precompile_programs();
     g_rsx_starting = false;
     host::input_clock_reset();
-    if (g_preloaded.empty()) start_preload();   // no database yet: the binaries of earlier sessions, in the background
-    else if (FILE* uf = fopen((shader_cache_dir() + "/used.txt").c_str(), "r")) {   // (keys already listed)
-        char line[64];
-        while (fgets(line, sizeof(line), uf)) if (u64 k = strtoull(line, nullptr, 16)) g_used_keys.insert(k);
-        fclose(uf);
-    }
+    if (g_preloaded.empty() && keep_programs()) start_preload();   // no database yet: the binaries of earlier sessions, in the background
     glGenTextures(1, &g_present_tex);
     gl_ok = true;
     LOG_I("rsx: OpenGL renderer ready (%s)", (const char*)glGetString(GL_RENDERER));
@@ -2537,15 +2584,21 @@ void method_2d(u32 sub, u32 mm, u32 arg) {
 
 // Occlusion counting (ZPASS_PIXEL_CNT reports): the game measures how many pixels of light sources pass the depth
 // test (glare and flares) between SET_ZPASS_PIXEL_COUNT_ENABLE toggles and reads cumulative counts with GET_REPORT.
-// Each enabled span is a GL samples-passed query; reports are written at the next flip, when the results are in.
+// Each enabled span is a GL samples-passed query. Reports are written in order once their last query is done: at each
+// flip without waiting, and at once (waiting for it) when the game is about to read one (rsx::g_report_want). Waiting
+// at the flip for the whole frame's queries (F1CE_ZPASS_PRECISE=flip, the old way) kept the RSX thread idle until the
+// GPU had finished the frame: ~10 ms per race-start frame.
 struct ZPassState {
     bool enabled = false;
     GLuint active = 0;                 // query of the span in progress
     std::vector<GLuint> spans;         // finished spans since the last clear, in order
     std::vector<GLuint> free_q;
     struct Pending { u32 ea; std::vector<GLuint> spans; };
-    std::vector<Pending> pending;
-    std::vector<std::vector<GLuint>> retired;   // span lists of cleared counters, recycled after the flip
+    std::deque<Pending> pending;
+    u64 issued = 0, written = 0;       // reports so far
+    // span lists of cleared counters, recycled once the reports issued before the clear are written
+    std::vector<std::pair<u64, std::vector<GLuint>>> retired;
+    std::unordered_map<GLuint, u32> value;   // results already read (until the query is recycled)
 } g_zpass;
 GLuint zpass_query() {
     if (g_zpass.free_q.empty()) { GLuint q; glGenQueries(1, &q); return q; }
@@ -2565,24 +2618,42 @@ void zpass_enable(bool on) {
     if (on) { g_zpass.active = zpass_query(); glBeginQuery(GL_SAMPLES_PASSED, g_zpass.active); }
     else zpass_close_span();
 }
-// writes the pending reports (blocking on their queries) and recycles the queries
-void zpass_resolve() {
-    std::unordered_map<GLuint, u32> result;
+// writes pending reports in order: those whose queries are done, or (block) all of them, or those of frames before
+// `want` (blocking on their queries); then recycles the queries no pending report uses any more
+void zpass_resolve(bool block, u64 want = 0) {
     auto value = [&](GLuint q) {
-        auto it = result.find(q);
-        if (it != result.end()) return it->second;
+        auto it = g_zpass.value.find(q);
+        if (it != g_zpass.value.end()) return it->second;
         GLuint v = 0;
         glGetQueryObjectuiv(q, GL_QUERY_RESULT, &v);
-        return result[q] = v;
+        return g_zpass.value[q] = v;
     };
-    for (auto& p : g_zpass.pending) {
+    while (!g_zpass.pending.empty()) {
+        auto& p = g_zpass.pending.front();
+        if (want) {
+            if (rsx::g_report_oldest.load(std::memory_order_relaxed) >= want) break;
+        } else if (!block && !p.spans.empty()) {   // (the GPU finishes queries in order: the last one says)
+            GLuint avail = 0;
+            glGetQueryObjectuiv(p.spans.back(), GL_QUERY_RESULT_AVAILABLE, &avail);
+            if (!avail) break;
+        }
         u64 total = 0;
         for (GLuint q : p.spans) total += value(q);
         st32(p.ea + 8, zpass_value(p.ea, total));
+        rsx::report_written();
+        g_zpass.written++;
+        g_zpass.pending.pop_front();
     }
-    g_zpass.pending.clear();
-    for (auto& l : g_zpass.retired) g_zpass.free_q.insert(g_zpass.free_q.end(), l.begin(), l.end());
-    g_zpass.retired.clear();
+    auto& r = g_zpass.retired;
+    size_t n = 0;
+    for (; n < r.size() && r[n].first <= g_zpass.written; n++)
+        for (GLuint q : r[n].second) { g_zpass.value.erase(q); g_zpass.free_q.push_back(q); }
+    r.erase(r.begin(), r.begin() + n);
+}
+// rsx::zpass_service
+void zpass_service() {
+    const u64 want = rsx::g_report_want.load(std::memory_order_acquire);
+    if (want && rsx::g_report_oldest.load(std::memory_order_relaxed) < want) zpass_resolve(true, want);
 }
 
 // Presentation (roadmap step 3) when the image is scaled (F1CE_SCALE) or FXAA is on (F1CE_FXAA=1): a full-window
@@ -2729,6 +2800,8 @@ bool report(u32 type, u32 ea) {
         glBeginQuery(GL_SAMPLES_PASSED, g_zpass.active);
     }
     g_zpass.pending.push_back({ea, g_zpass.spans});
+    g_zpass.issued++;
+    rsx::report_issued();
     static const bool zlog = getenv("F1CE_ZPASS_LOG") != nullptr;   // debug: the target each report is issued on
     static u64 last_draws = 0;
     if (zlog && g_frame % 300 == 0)
@@ -2737,6 +2810,22 @@ bool report(u32 type, u32 ea) {
               (unsigned long long)(g_draws - last_draws));
     last_draws = g_draws;
     return true;
+}
+// rsx::g_upload_words: as method() for each word of a run on one upload port
+void upload_words(u32 m, const u32* a, u32 n, bool non_inc) {
+    if (non_inc) R[m >> 2] = a[n - 1];
+    else memcpy(&R[m >> 2], a, n * 4);
+    if (m < 0x0C00) {
+        const u32 k = std::min(n, 512 * 4 - std::min(vp_load_pos, 512u * 4));
+        memcpy(&vp_words[vp_load_pos], a, k * 4);
+        vp_load_pos += k;
+        g_vp_gen++;
+        return;
+    }
+    for (u32 i = 0; i < n && vp_const_pos < 468 * 4; i++) {
+        vp_slot_ver[vp_const_pos >> 2] = ++vp_ver;
+        memcpy(&vp_consts[vp_const_pos++], &a[i], 4);
+    }
 }
 void method(u32 m, u32 arg) {
     m &= 0xFFFC;
@@ -2752,6 +2841,13 @@ void method(u32 m, u32 arg) {
     if (__builtin_expect(inited, 1) && m < 0x2000 && !special[m >> 2]) { R[m >> 2] = arg; return; }
     gl_init_once();
     inited = true;
+    // the front end's shortcuts (as rsx_vk.cpp): plain register writes skip this call, vertex program words come in runs.
+    // F1CE_TRACE_VPC needs each constant write here.
+    if (!g_plain_on) {
+        for (u32 i = 0; i < 0x800; i++) g_plain[i] = !special[i];
+        if (!getenv("F1CE_TRACE_VPC")) g_upload_words = upload_words;
+        g_plain_on = true;
+    }
     if (m == 0x1D7C || m == 0x17CC) {   // debug: distinct values (AA control / zpass enable)
         static std::set<u64> seen;
         static std::mutex mu;
@@ -2765,7 +2861,7 @@ void method(u32 m, u32 arg) {
     if (gl_ok && m == 0x17C8 && arg == 1) {                         // NV4097_CLEAR_REPORT_VALUE (ZPASS_PIXEL_CNT)
         bool on = g_zpass.enabled;
         zpass_enable(false);
-        g_zpass.retired.push_back(std::move(g_zpass.spans));
+        g_zpass.retired.push_back({g_zpass.issued, std::move(g_zpass.spans)});
         g_zpass.spans.clear();
         zpass_enable(on);
         return;
@@ -2788,6 +2884,7 @@ void method(u32 m, u32 arg) {
     if (m >> 13) { method_2d(m >> 13, m & 0x1FFF, arg); return; }
     if (m >= 0x0B80 && m < 0x0C00) {                    // TRANSFORM_PROGRAM[32]
         if (vp_load_pos < 512 * 4) vp_words[vp_load_pos++] = arg;
+        g_vp_gen++;
         return;
     }
     if (m >= 0x1F00 && m < 0x1F80) {                    // TRANSFORM_CONSTANT[32]
@@ -2948,7 +3045,7 @@ void flip(u32 ea, u32 pitch, u32 width, u32 height) {
         glBindFramebuffer(GL_FRAMEBUFFER, 0); g_tgt_valid = false;
     }
     if (!overlay_drawn) overlay_pass(ww, wh);
-    zpass_resolve();
+    zpass_resolve(rsx::zpass_mode() == rsx::ZpassMode::flip);
     for (auto& [k, sf] : g_surfaces)   // main-memory render targets: finish last frame's readback, start this one
         if (sf.main_ea) { write_back_pending(&sf); write_back_start(&sf); }
     glBindFramebuffer(GL_FRAMEBUFFER, 0); g_tgt_valid = false;
@@ -3050,9 +3147,28 @@ void flip(u32 ea, u32 pitch, u32 width, u32 height) {
                                   (unsigned long long)g_frame, (unsigned long long)g_draws, g_programs.size(),
                                   g_textures.size(), g_surfaces.size(), g_vtx_cache.size(), g_idx_cache.size());
     evict_index_caches(60);
-    if (g_frame % 60 == 0) { evict_buffers(); evict_raw_regions(); }
+    if (g_frame % 60 == 0) { evict_buffers(); evict_raw_regions(); evict_textures(); }
     heap_end_frame(g_heap);
     heap_end_frame(g_iheap);
+}
+
+// "rsx mem:" (with the "mem:" line, on the RSX thread): what the caches hold; texture and surface sizes are estimates
+// from their guest sizes (RGBA8, a full mip chain), the driver's own copies are not seen here
+std::string mem_report() {
+    double tex = 0, surf = 0, depth = 0;
+    for (const auto& [k, t] : g_textures) tex += (double)t.w * t.h * 4 * 4 / 3;
+    auto surface_bytes = [](const Surface& s) {
+        const double px = (double)scaled(s.width, s.scale_x) * scaled(s.height, s.scale_y);
+        return s.tex ? px * 4 + (s.ms_color ? (double)s.ms_w * s.ms_h * 8 * msaa_samples() : 0) : 0;
+    };
+    for (const auto& [k, s] : g_surfaces) surf += surface_bytes(s);
+    for (const auto& [k, s] : g_surface_spares) surf += surface_bytes(s);
+    for (const auto& [k, d] : g_depths) depth += (double)scaled(d.width, d.scale_x) * scaled(d.height, d.scale_y) * 4;
+    char b[320];
+    snprintf(b, sizeof(b), "textures %zu (~%.0f MB), surfaces %zu + %zu spare (~%.0f MB), depth %zu (~%.0f MB), programs %zu (vp %zu fp %zu), vertex buffers %zu + regions %zu, ",
+             g_textures.size(), tex / 1048576.0, g_surfaces.size(), g_surface_spares.size(), surf / 1048576.0, g_depths.size(),
+             depth / 1048576.0, g_programs.size(), g_vp_cache.size(), g_fp_cache.size(), g_vtx_cache.size(), g_regions.size());
+    return b + shared_mem_report();
 }
 }  // namespace gl
 }  // namespace rsx

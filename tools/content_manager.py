@@ -40,7 +40,8 @@ PERF_FIELDS = [('aero', 'drag', 'Drag'), ('aero', 'downforce', 'Downforce'), ('e
 THUMB = 150
 USED_LEGEND = ('Where the game uses each picture: "in game" = the car in races and time trials; "garage" = the car '
                'in the menus (driver select garage). The garage car shows the race car\'s base paint and has its own '
-               'copy of the sponsor decals (Build updates both); LOD = low-detail versions for distant cars.')
+               'copy of the sponsor decals (Build updates both); LOD = low-detail versions for distant cars. Specular '
+               '/ reflection map: where the paint shines (most 2006 cars have one on the LOD car only).')
 
 
 def fmt(v):
@@ -84,23 +85,24 @@ def open_path(p):
 class ImageSlot(ttk.Frame):
     """A preview with Replace / Open buttons for one editable PNG of a pack."""
 
-    def __init__(self, master, app, title):
+    def __init__(self, master, app, title, size=THUMB):
         super().__init__(master)
-        self.app, self.path, self.photo = app, None, None
+        self.app, self.path, self.photo, self.note, self.size = app, None, None, '', size
         ttk.Label(self, text=title, font=('Segoe UI', 9, 'bold')).pack(anchor='w')
         self.pic = ttk.Label(self, relief='sunken', anchor='center')
         self.pic.pack(fill='both', expand=True)
-        self.info = ttk.Label(self, foreground='#555', wraplength=230, justify='left')
+        self.info = ttk.Label(self, foreground='#555', wraplength=max(190, size + 40), justify='left')
         self.info.pack(anchor='w')
         row = ttk.Frame(self)
         row.pack(fill='x')
         ttk.Button(row, text='Replace...', command=self.replace).pack(side='left')
+        ttk.Button(row, text='Export...', command=self.export).pack(side='left')
         ttk.Button(row, text='Open', command=lambda: self.path and open_path(self.path)).pack(side='left')
 
     def show(self, path, note=''):
-        self.path = Path(path) if path else None
+        self.path, self.note = Path(path) if path else None, note
         exists = bool(self.path and self.path.exists())
-        self.photo = load_photo(self.path) if exists else None
+        self.photo = load_photo(self.path, self.size) if exists else None
         self.pic.configure(image=self.photo or '', text='' if self.photo else '(none)')
         lines = []
         if self.path:
@@ -122,13 +124,29 @@ class ImageSlot(ttk.Frame):
         if not src:
             return
         src = Path(src)
+        if src.suffix.lower() == '.dds' and self.app.file_info(self.path).get('alpha_of'):
+            messagebox.showerror('Content Manager', f'{self.path.name} is a greyscale mask: replace it with a PNG')
+            return
         if src.suffix.lower() == '.dds':      # used as it is (upside down, as the game stores it)
             shutil.copyfile(src, self.path.with_suffix('.dds'))
         else:
             shutil.copyfile(src, self.path)
             self.path.with_suffix('.dds').unlink(missing_ok=True)
         self.app.log(f'{self.path.relative_to(self.app.pack)}: replaced by {src.name} (Build to apply)')
-        self.show(self.path)
+        self.show(self.path, self.note)
+
+    def export(self):
+        """A copy of the picture (the DDS when one replaced the PNG) to edit elsewhere."""
+        if not self.path:
+            return
+        src = self.path.with_suffix('.dds') if self.path.with_suffix('.dds').exists() else self.path
+        if not src.exists():
+            return
+        dst = filedialog.asksaveasfilename(title=f'Export {src.name}', initialfile=src.name,
+                                           defaultextension=src.suffix, filetypes=[('Images', '*' + src.suffix)])
+        if dst:
+            shutil.copyfile(src, dst)
+            self.app.log(f'{src.relative_to(self.app.pack)}: exported to {dst}')
 
 
 class Form(ttk.Frame):
@@ -254,20 +272,20 @@ class App(tk.Tk):
         perf.pack(side='left', fill='x', expand=True, anchor='n', padx=(10, 0))
         self.perf_form = Form(perf, [(f'{g}.{k}', label) for g, k, label in PERF_FIELDS])
         self.perf_form.pack(fill='x')
-        ttk.Label(d, text=USED_LEGEND, wraplength=900, justify='left', foreground='#555').pack(anchor='w', pady=(6, 0))
-        imgs = ttk.Frame(d)
-        imgs.pack(fill='both', expand=True, pady=4)
-        self.team_imgs = [ImageSlot(imgs, self, t) for t in
-                          ('Base paint', 'Sponsor decals', 'Team logo (menus)', 'LOD base paint', 'LOD sponsor decals',
-                           'Driver overalls (in the car)')]
-        for i, slot in enumerate(self.team_imgs):
-            slot.grid(row=i // 3, column=i % 3, sticky='nsew', padx=4, pady=2)
-        for c in range(3):
-            imgs.columnconfigure(c, weight=1)
+        ttk.Label(d, text=USED_LEGEND, wraplength=780, justify='left', foreground='#555').pack(anchor='w', pady=(6, 0))
         row = ttk.Frame(d)
-        row.pack(fill='x')
+        row.pack(side='bottom', fill='x')
         ttk.Button(row, text='Open livery folder', command=lambda: self.open_sub('livery')).pack(side='left')
         ttk.Button(row, text='Open 3D model folder', command=lambda: self.open_sub('model')).pack(side='left')
+        imgs = self._scrolled(d, fit_width=True)
+        self.team_imgs = [ImageSlot(imgs, self, t, 110) for t in
+                          ('Base paint', 'Sponsor decals', 'Specular / reflection map', 'Team logo (menus)',
+                           'LOD base paint', 'LOD sponsor decals', 'LOD specular / reflection map',
+                           'Driver overalls (in the car)')]
+        for i, slot in enumerate(self.team_imgs):
+            slot.grid(row=i // 4, column=i % 4, sticky='nsew', padx=4, pady=2)
+        for c in range(4):
+            imgs.columnconfigure(c, weight=1)
 
     def _rims_tab(self):
         self.rims_tab, self.rim_list, d = self._list_and_detail('Rims')
@@ -291,13 +309,14 @@ class App(tk.Tk):
         self.driver_list.bind('<<ListboxSelect>>', lambda e: self.show_driver())
         cols = ttk.Frame(d)
         cols.pack(fill='both', expand=True)
+        imgs = ttk.Frame(cols)
+        imgs.pack(side='right', fill='both', padx=(10, 0))     # first: the form gets what is left
         self.driver_form = Form(cols, DRIVER_FIELDS)
         self.driver_form.pack(side='left', fill='x', expand=True, anchor='n')
-        imgs = ttk.Frame(cols)
-        imgs.pack(side='left', fill='both', padx=10)
-        self.driver_imgs = [ImageSlot(imgs, self, t) for t in ('Helmet paint (in the car)', 'Pre-race photo (menus)')]
-        for s in self.driver_imgs:
-            s.pack(fill='both', expand=True, pady=4)
+        self.driver_imgs = [ImageSlot(imgs, self, t, 120) for t in ('Helmet paint (in the car)', 'Helmet specular',
+                                                               'Pre-race photo (menus)')]
+        for i, s in enumerate(self.driver_imgs):
+            s.grid(row=i // 2, column=i % 2, sticky='nsew', padx=4, pady=4)
 
     def _points_tab(self):
         self.points_tab = ttk.Frame(self.nb, padding=6)
@@ -317,15 +336,27 @@ class App(tk.Tk):
     def _helmets_tab(self):
         self.helmets_tab = ttk.Frame(self.nb, padding=6)
         self.nb.add(self.helmets_tab, text='Player helmets')
-        canvas = tk.Canvas(self.helmets_tab, highlightthickness=0)
-        sb = ttk.Scrollbar(self.helmets_tab, orient='vertical', command=canvas.yview)
+        self.helmet_grid = self._scrolled(self.helmets_tab)
+        self.helmet_slots = []
+
+    def _scrolled(self, master, fit_width=False):
+        """A frame in a vertically scrolling area (fit_width: as wide as the area)."""
+        outer = ttk.Frame(master)
+        outer.pack(fill='both', expand=True, pady=4)
+        canvas = tk.Canvas(outer, highlightthickness=0)
+        sb = ttk.Scrollbar(outer, orient='vertical', command=canvas.yview)
         canvas.configure(yscrollcommand=sb.set)
         sb.pack(side='right', fill='y')
         canvas.pack(fill='both', expand=True)
-        self.helmet_grid = ttk.Frame(canvas)
-        canvas.create_window((0, 0), window=self.helmet_grid, anchor='nw')
-        self.helmet_grid.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
-        self.helmet_slots = []
+        inner = ttk.Frame(canvas)
+        win = canvas.create_window((0, 0), window=inner, anchor='nw')
+        inner.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox('all')))
+        if fit_width:
+            canvas.bind('<Configure>', lambda e: canvas.itemconfigure(win, width=e.width))
+        wheel = lambda e: canvas.yview_scroll(-1 if e.delta > 0 else 1, 'units')  # noqa: E731
+        outer.bind('<Enter>', lambda e: canvas.bind_all('<MouseWheel>', wheel))
+        outer.bind('<Leave>', lambda e: canvas.unbind_all('<MouseWheel>'))
+        return inner
 
     # ------------------------------------------------------------------ folders and settings
     def set_launcher_dir(self, d):
@@ -427,13 +458,19 @@ class App(tk.Tk):
             self.log(f'{self.pack.name}: made by an older version (no WHEELS folder, no "used in" data): create a '
                      f'new pack to get every feature')
 
-    def used_in(self, path):
+    def pack_rel(self, path):
         try:
             rel = Path(path).relative_to(self.pack).as_posix()
         except ValueError:
-            return []
-        rel = rel[:-4] + '.png' if rel.lower().endswith('.dds') else rel
-        info = self.manifest.get('files', {}).get(rel)
+            return None
+        return rel[:-4] + '.png' if rel.lower().endswith('.dds') else rel
+
+    def file_info(self, path):
+        """The template.json entry of a pack picture ({} when it has none)."""
+        return self.manifest.get('files', {}).get(self.pack_rel(path)) or {}
+
+    def used_in(self, path):
+        rel, info = self.pack_rel(path), self.file_info(path)
         if not info:
             return []
         team = Path(rel).parts[1] if rel.startswith('CARS/') else None
@@ -487,13 +524,25 @@ class App(tk.Tk):
         roles = (self.roles or {}).get(t['id'], {})
         role = lambda k: self.pack / roles[k] if roles.get(k) else None  # noqa: E731
         self.team_imgs[0].show(role('paint'))
-        self.team_imgs[1].show(role('decals'), '' if roles.get('decals') else 'one-layer livery: no decal sheet')
-        self.team_imgs[2].show(car / 'ui' / 'TeamLogo_Big.png')
+        self.team_imgs[1].show(role('decals'), 'no specular map of its own: shines as the paint under it'
+                               if roles.get('decals') else 'one-layer livery: no decal sheet')
+        self.team_imgs[3].show(car / 'ui' / 'TeamLogo_Big.png')
         same = roles.get('paint_lod') and roles.get('paint_lod') == roles.get('paint')
-        self.team_imgs[3].show(role('paint_lod'), 'the same file as the base paint' if same else '')
-        self.team_imgs[4].show(role('decals_lod'))
+        self.team_imgs[4].show(role('paint_lod'), 'the same file as the base paint' if same else '')
+        self.team_imgs[5].show(role('decals_lod'))
+        for slot, key in ((self.team_imgs[2], 'specular'), (self.team_imgs[6], 'specular_lod')):
+            mask = role(key + '_mask')
+            if mask and mask.exists():
+                slot.show(mask, f'white = reflective; Build puts it into the alpha of {Path(roles[key]).name}')
+            elif roles.get(key):
+                slot.show(role(key), 'reflection mask in the alpha channel' if roles.get(key + '_mask') else
+                          'specular intensity (greyscale)')
+            elif 'specular_maps' in self.manifest or key in roles:
+                slot.show(None, 'none: the car has the same shine all over')
+            else:
+                slot.show(None, 'Build once to add the specular maps to this older pack')
         drv = car / 'driver'
-        self.team_imgs[5].show(next(iter(sorted(drv.glob('InCarOveralls*.png'))), None) if drv.is_dir() else None)
+        self.team_imgs[7].show(next(iter(sorted(drv.glob('InCarOveralls*.png'))), None) if drv.is_dir() else None)
 
     def show_rims(self):
         t = self.cur(self.rim_list, self.teams)
@@ -526,7 +575,8 @@ class App(tk.Tk):
         if dr:
             base = self.pack / 'DRIVERS' / dr['id']
             self.driver_imgs[0].show(base / 'Helmet' / 'Colour.png')
-            self.driver_imgs[1].show(base / 'ui' / 'PreRace.png')
+            self.driver_imgs[1].show(base / 'Helmet' / 'Specular.png')
+            self.driver_imgs[2].show(base / 'ui' / 'PreRace.png')
 
     def open_sub(self, sub):
         t = getattr(self, 'shown_team', None)
@@ -698,7 +748,8 @@ class App(tk.Tk):
                                                     'Manager / season_pack.py): nothing to build.')
             return
         if self.save():
-            self.run_tool(['build', str(self.pack)])
+            # reload: a build adds the specular map files to packs made before them
+            self.run_tool(['build', str(self.pack)], self.select_pack)
 
     def open_pack(self):
         if self.pack:

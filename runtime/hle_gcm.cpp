@@ -284,6 +284,16 @@ void log_cpu_use() {
     LOG_I("cpu: %.2f cores at %.1f fps", (double)(cpu - last_cpu) / (now - window), flips * 1e6 / (now - window));
     log_thread_cpu();
     window = now; last_cpu = cpu; flips = 0;
+    // RAM every 30 s (F1CE_MEM_LOG=<s>, 0 = off): the process ("mem:") and the renderer's caches ("rsx mem:")
+    static const double mem_every = getenv("F1CE_MEM_LOG") ? atof(getenv("F1CE_MEM_LOG")) : 30;
+    static u64 mem_last = 0;
+    if (mem_every > 0 && now - mem_last >= (u64)(mem_every * 1e6) - 1000000) {
+        mem_last = now;
+        const u64 t0 = time_usec();
+        const std::string p = process_mem_report(), r = rsx::mem_report();
+        LOG_I("mem: %s (%.1f ms)", p.c_str(), (time_usec() - t0) / 1e3);
+        LOG_I("rsx mem: %s", r.c_str());
+    }
 }
 
 // frame pacing over 5 s: median / 99th percentile / worst flip interval ("1% low" = 1000 / p99), and for each frame over
@@ -356,6 +366,7 @@ void do_flip(u32 id) {
     log_cpu_use();
     g.flip_status = 0;
     g.flips_done++;
+    rsx::g_frames_done++;
     raise_interrupt(g.flip_handler, 1);
 }
 
@@ -406,6 +417,7 @@ void exec_method(u32 method, u32 arg) {
                 }
                 if (old_spin) { std::this_thread::yield(); continue; }
                 if (now - start < 30) { for (int i = 0; i < 16; i++) _mm_pause(); continue; }
+                rsx::zpass_service();   // (the PPU may be waiting for a report before it releases this)
                 if (!lw.armed) { line_wait_arm(lw, a, a); continue; }
                 (line_wait_block(lw, 1) ? woken : timeouts)++;
             }
@@ -793,6 +805,7 @@ void rsx_thread() {
         }
         if (put == get) {
             flush_pending();
+            rsx::zpass_service();
             static u64 idle_since = 0;
             u64 t = time_usec();
             // after 200 us without commands, block until the game writes PUT (probe after its store, put_written) or 1 ms
@@ -1127,6 +1140,37 @@ HLE_FUNC(cellGcmSetDisplayBuffer) {
     RET(CELL_OK);
 }
 // cellGcmSetFlip(ctx, id): append a flip command to the game's command buffer
+// Occlusion reports: the game reads a frame's counts two frames later (ring of three slots, 0x42D6F0; also from SPU
+// jobs). The renderers write reports when the GPU is done with them instead of waiting at each flip, so before the PPU
+// starts the frame after `frame` (here, at the end of `frame`), every report of frames up to frame - 2 must be written.
+// The wait before this leaves the RSX at most one flip behind, so it has already run those commands and only the GPU
+// can be behind; the RSX thread writes them at once (rsx::zpass_service at its next draw or wait). Normally they are
+// long written. (The old way, F1CE_ZPASS_PRECISE=flip, made the RSX thread wait for the GPU at every flip.)
+void wait_reports(u64 frame) {
+    if (rsx::zpass_mode() != rsx::ZpassMode::lazy || frame < 2) return;
+    static u64 calls = 0, waits = 0, total_us = 0, longest = 0, window = 0, timeouts = 0;
+    calls++;
+    const u64 want = frame - 1, t0 = time_usec();
+    if (rsx::g_report_oldest.load(std::memory_order_acquire) < want) {
+        rsx::g_report_want.store(want, std::memory_order_release);
+        for (int i = 0; rsx::g_report_oldest.load(std::memory_order_acquire) < want; i++) {
+            if (time_usec() - t0 > 100000) { timeouts++; break; }   // (the RSX thread is stuck elsewhere: go on)
+            if (i < 64) std::this_thread::yield();
+            else sleep_usec(50);
+        }
+        rsx::g_report_want.store(0, std::memory_order_release);
+        const u64 dt = time_usec() - t0;
+        waits++; total_us += dt; longest = std::max(longest, dt);
+    }
+    if (!window) window = t0;
+    if (t0 - window > 10000000) {
+        LOG_I("zpass: %llu of %llu flips waited for the GPU's reports (%.1f ms total, longest %.1f ms, %llu timeouts)",
+              (unsigned long long)waits, (unsigned long long)calls, total_us / 1e3, longest / 1e3, (unsigned long long)timeouts);
+        calls = waits = total_us = longest = timeouts = 0;
+        window = t0;
+    }
+}
+
 HLE_FUNC(cellGcmSetFlip) {
     u32 ctx = (u32)ARG(0), id = (u32)ARG(1);
     if (id > 7) RET((s32)0x802100FF);
@@ -1135,6 +1179,7 @@ HLE_FUNC(cellGcmSetFlip) {
     // F1CE_MAX_FRAMES_AHEAD (default 1) flips ahead of the RSX.
     static const u64 max_ahead = getenv("F1CE_MAX_FRAMES_AHEAD") ? atoi(getenv("F1CE_MAX_FRAMES_AHEAD")) : 1;
     while (g.flips_queued - g.flips_done > max_ahead) sleep_usec(100);
+    wait_reports(g.flips_queued);
     g.flips_queued++;
     static bool logged = false;
     if (!logged) { logged = true; LOG_I("cellGcmSetFlip: ctx=%08x (default %08x)", ctx, g.context_addr); }

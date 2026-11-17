@@ -13,6 +13,12 @@ template writes (folders named by the database ids: CARS/Honda, DRIVERS/jbutton,
   CARS/<team>/livery/*.png          base paint (uv0) and sponsor decals (uv1) of the race model, their low-detail
                                     (LOD) versions for distant cars, panels, driver branding swaps (one per car);
                                     names differ per team: template.json "teams" says which file is which
+                                    (specular / specular_lod: the paint's specular map; the decals have none,
+                                    they shine as the paint under them)
+  CARS/<team>/livery/*_reflection.png  a greyscale copy of each reflection map's alpha channel, the mask the game
+                                    reads (material slot Reflectivity; white = most reflective): edit this one,
+                                    build puts it back into the alpha of the map (any size: the map's colour is
+                                    scaled to it). SpecularIntensity maps are greyscale already (no copy)
   CARS/<team>/driver/*.png          the drivers' overalls and arms seen in the car
   CARS/<team>/ui/*.png              team logo, driver select picture
   CARS/<team>/model/<team>.obj      with --models: the car (lod0) for Blender, with its textures as DDS; edit it
@@ -63,6 +69,9 @@ same name used as it is, i.e. upside down; any size, encoded in the original's f
   DATABASE/offline.wad/entities.bin                       (the game reads offline.wad's copy, not update.wad's)
   DATABASE/offline.wad/dynamics.bin                       (likewise)
 Files built earlier that no longer differ are removed, so reverting an edit restores the original.
+Model files at their template places that template.json does not list (a pack made without --models, the models
+copied in from another pack) are always imported: an unedited export changes nothing.
+Season packs made before the specular maps were named get the roles and the _reflection.png files on their next build.
 """
 import concurrent.futures
 import functools
@@ -130,13 +139,15 @@ def livery_roles(game, team, model):
         t = tex.get(m.samplers.get(slot))
         ok = t is not None and t.gtf is not None and t.path.replace('\\', '/').lower().startswith('textures/')
         return t if ok else None
-    roles, body = {}, {}
+    roles, body, specs = {}, {}, []
     for node, world, depth, path in s.walk():
         m = node.mesh and mats.get(node.mesh.material)
         if not m:
             continue
         lod = 'lod0' not in path
         paint, decals = car_tex(m, 'BaseColour'), car_tex(m, 'BaseColour2')
+        if paint:
+            specs.append((lod, paint, car_tex(m, 'Reflectivity'), car_tex(m, 'SpecularIntensity')))
         if paint and decals:
             for t, role in ((paint, 'paint'), (decals, 'decals')):
                 roles.setdefault(role + ('_lod' if lod else ''), f'CARS/{team}/livery/{tex_stem(t.path)}.png')
@@ -146,7 +157,103 @@ def livery_roles(game, team, model):
     if 'paint' not in roles and body:
         # one-layer liveries (most classic cars)
         roles['paint'] = f'CARS/{team}/livery/{tex_stem(max(body, key=body.get))}.png'
+    # the paint's specular map (most 2006 cars have one on the LOD material only; the lod0 ones use a constant);
+    # the decals have none, they shine as the paint under them
+    for lod, paint, refl, inten in specs:
+        sfx = '_lod' if lod else ''
+        if (refl or inten) and f'CARS/{team}/livery/{tex_stem(paint.path)}.png' == roles.get('paint' + sfx):
+            rel = f'CARS/{team}/livery/{tex_stem((refl or inten).path)}.png'
+            roles.setdefault('specular' + sfx, rel)
+            if refl:
+                roles.setdefault('specular' + sfx + '_mask', mask_rel(rel))
     return roles
+
+
+def helmet_stem(path):
+    """The HELMETS/<stem>/ folder name of a helmet shape model."""
+    if path.lower().startswith('animations/driver/classics/'):
+        return 'Classic_' + path.split('/')[-2]
+    if path.lower().startswith('animations/frontend/'):
+        return 'Garage_Helmet'
+    return path.split('/')[-1].rsplit('.', 1)[0]
+
+
+def untracked_models(pack, manifest):
+    """Model files at their template places that template.json does not list (a pack made without --models and
+    the models copied in, e.g. from another pack): {pack path: [archive, wad path]}. Imported as edited; an
+    unedited export changes nothing."""
+    out = {}
+    for team, model in TEAMS.items():
+        for ext in ('.glb', '.obj'):
+            out[f'CARS/{team}/model/{team}{ext}'] = ['offline.wad', f'Models/{model}/CarParts.sg']
+    for archive, path in HELMET_MODELS:
+        stem = helmet_stem(path)
+        for ext in ('.glb', '.obj'):
+            out[f'HELMETS/{stem}/{stem}{ext}'] = [archive, path]
+    known = manifest.get('models', {})
+    return {rel: t for rel, t in out.items() if rel not in known and (pack / rel).exists()}
+
+
+def mask_rel(rel):
+    """The greyscale copy of a reflection map's alpha channel (the mask the game reads), next to it."""
+    return rel[:-4] + '_reflection.png'
+
+
+def reflection_maps(game, team, model):
+    """Pack paths of the team's textures used as reflection masks (material slot Reflectivity: the mask is the
+    alpha channel) in the race and garage models."""
+    out = set()
+    for archive, path in [('offline.wad', f'Models/{model}/CarParts.sg')] + garage_models(game, model):
+        s = game.scene(archive, path)
+        if s is None:
+            continue
+        tex = {t.name: t for t in s.textures}
+        for m in s.materials:
+            t = tex.get(m.samplers.get('Reflectivity'))
+            if t is not None and t.gtf is not None and t.path.replace('\\', '/').lower().startswith('textures/'):
+                out.add(f'CARS/{team}/livery/{tex_stem(t.path)}.png')
+    return out
+
+
+def write_reflection_masks(pack, manifest, rels):
+    """For each reflection map PNG of the pack, a greyscale PNG of its alpha (white = most reflective) that is
+    easier to edit; build puts it back into the map's alpha."""
+    n = 0
+    for rel in sorted(rels):
+        info = manifest['files'].get(rel)
+        mrel = mask_rel(rel)
+        if info is None or mrel in manifest['files'] or not (pack / rel).exists():
+            continue
+        w, h, px = gtf.read_png(pack / rel)
+        a = px[3::4]
+        grey = bytearray(w * h * 4)
+        grey[0::4] = grey[1::4] = grey[2::4] = a
+        grey[3::4] = b'\xff' * (w * h)
+        gtf.write_png(pack / mrel, w, h, bytes(grey))
+        manifest['files'][mrel] = {'sha1': sha1(pack / mrel), 'targets': [], 'alpha_of': rel,
+                                   'used_in': info.get('used_in', [])}
+        n += 1
+    return n
+
+
+def merged_pixels(pack, rel, mrel, mask_changed):
+    """(w, h, upright RGBA) of a pack PNG, with the alpha taken from its reflection mask PNG when that changed
+    (the colour is scaled to the mask's size when they differ)."""
+    w, h, px = gtf.read_png(pack / rel)
+    if not mask_changed:
+        return w, h, px
+    mw, mh, mpx = gtf.read_png(pack / mrel)
+    if (mw, mh) != (w, h):
+        out = bytearray(mw * mh * 4)
+        for y in range(mh):
+            sy = y * h // mh
+            for x in range(mw):
+                s = (sy * w + x * w // mw) * 4
+                out[(y * mw + x) * 4:(y * mw + x) * 4 + 4] = px[s:s + 4]
+        w, h, px = mw, mh, out
+    px = bytearray(px)
+    px[3::4] = mpx[0::4]
+    return w, h, bytes(px)
 
 
 def wheel_roles(ents, team, files):
@@ -192,8 +299,8 @@ def used_in(rel, targets, roles=None):
             out.add('garage')
         else:
             out.add('race')
-    if roles and rel == roles.get('paint'):
-        out.add('garage')       # the garage model takes the race model's base paint
+    if roles and rel in (roles.get('paint'), roles.get('specular')):
+        out.add('garage')       # the garage model takes the race model's base paint (and its specular map)
     return sorted(out)
 
 
@@ -331,7 +438,7 @@ def cmd_template(usrdir, pack, models):
         raise SystemExit(f'{pack} already has a template; delete it first')
     ents = entities.export(entities.parse(game.get('offline.wad', 'entities.bin')))
     log(f'Database: {len(ents["drivers"])} drivers, {len(ents["teams"])} teams, {len(ents["cars"])} cars')
-    sources, models_written, team_roles, gltf_jobs = {}, {}, {}, []
+    sources, models_written, team_roles, gltf_jobs, reflections = {}, {}, {}, [], set()
     for i, (team, model) in enumerate(TEAMS.items()):
         progress(i, len(TEAMS), f'reading the {team} car models')
         if game.get('offline.wad', f'Models/{model}/CarParts.sg') is None:
@@ -341,9 +448,10 @@ def cmd_template(usrdir, pack, models):
         for rel, targets in found.items():
             sources.setdefault(rel, []).extend(targets)
         team_roles[team] = livery_roles(game, team, model)
+        reflections |= reflection_maps(game, team, model)
         log(f'{team}: {len(found)} car textures (race model' +
             (', garage model' if garage_models(game, model) else '') + ')' +
-            ''.join(f', {k} {Path(v).name}' for k, v in team_roles[team].items() if not k.endswith('_lod')))
+            ''.join(f', {k} {Path(v).name}' for k, v in team_roles[team].items() if '_lod' not in k))
         if models:
             mdir = pack / 'CARS' / team / 'model'
             mdir.mkdir(parents=True, exist_ok=True)
@@ -366,17 +474,13 @@ def cmd_template(usrdir, pack, models):
         for archive, path in HELMET_MODELS:
             if game.scene(archive, path) is None:
                 continue
-            stem = path.split('/')[-1].rsplit('.', 1)[0]
-            if path.lower().startswith('animations/driver/classics/'):
-                stem = 'Classic_' + path.split('/')[-2]
-            elif path.lower().startswith('animations/frontend/'):
-                stem = 'Garage_Helmet'
+            stem = helmet_stem(path)
             rel = f'HELMETS/{stem}/{stem}.obj'
             (pack / rel).parent.mkdir(parents=True, exist_ok=True)
             sg.cmd_obj(game.scene(archive, path), pack / rel)
             models_written[rel] = [archive, path]
             gltf_jobs.append(((archive, path), rel[:-4] + '.glb', None, None))
-    manifest = {'files': {}, 'built': [], 'teams': team_roles}
+    manifest = {'files': {}, 'built': [], 'teams': team_roles, 'specular_maps': True}
     write_images(pack, sources, game, manifest)
     if gltf_jobs:
         log('Exporting glTF models (both UV sets, for Blender)')
@@ -390,6 +494,7 @@ def cmd_template(usrdir, pack, models):
     for rel, info in manifest['files'].items():
         team = Path(rel).parts[1] if rel.startswith('CARS/') else None
         info['used_in'] = used_in(rel, info['targets'], team_roles.get(team))
+    log(f'{write_reflection_masks(pack, manifest, reflections)} reflection masks (greyscale copies of the alpha)')
     log('Database files: entities.json, dynamics.json, points.txt')
     db = pack / 'DATABASE'
     db.mkdir(parents=True, exist_ok=True)
@@ -460,35 +565,59 @@ def cmd_build(usrdir, pack):
     game = Game(usrdir)
     pack = Path(pack)
     manifest = json.loads((pack / 'template.json').read_text())
+    if 'teams' in manifest and not manifest.get('specular_maps'):
+        # season packs made before 2026-11-17: name the specular maps and add the reflection mask PNGs
+        reflections = set()
+        for team, model in TEAMS.items():
+            if team in manifest['teams']:
+                roles = livery_roles(game, team, model)
+                manifest['teams'][team].update({k: v for k, v in roles.items() if k.startswith('specular')})
+                reflections |= reflection_maps(game, team, model)
+        print(f'{write_reflection_masks(pack, manifest, reflections)} reflection masks added to this older pack')
+        manifest['specular_maps'] = True
+    masks = {info['alpha_of']: rel for rel, info in manifest['files'].items() if info.get('alpha_of')}
     sg_changes = {}         # (group, archive, wad path) -> [(texture key, GTF bytes)]
     outputs = {}            # pack-relative output path -> bytes
     for rel, info in manifest['files'].items():
+        if info.get('alpha_of'):
+            continue        # merged into the map it was taken from, below
         src = pack / rel
         dds = src.with_suffix('.dds')
+        mrel = masks.get(rel)
+        mask_changed = bool(mrel) and (pack / mrel).exists() and sha1(pack / mrel) != manifest['files'][mrel]['sha1']
         if dds.exists():
             src = dds
-        elif not src.exists() or sha1(src) == info['sha1']:
+            if mask_changed:
+                print(f'{mrel}: ignored, {dds.name} is used as it is')
+        elif not src.exists() or (sha1(src) == info['sha1'] and not mask_changed):
             continue
+        if src.suffix == '.png':
+            w, h, px = merged_pixels(pack, rel, mrel, mask_changed)
+            encode = lambda like: gtf.gtf_from_rgba(w, h, gtf.flip_rows(w, h, px), like)  # noqa: E731
+        else:
+            encode = lambda like: sg.texture_from_file(src, like, flip=True)  # noqa: E731
         group = group_of(rel)
         for archive, path, key in info['targets']:
             if key is None:
                 orig = gtf.Gtf(game.get(archive, path))
-                outputs[f'{group}/{archive}/{path}'] = sg.texture_from_file(src, orig, flip=True)
+                outputs[f'{group}/{archive}/{path}'] = encode(orig)
             else:
                 orig = sg.find_texture(game.scene(archive, path), key).gtf
-                sg_changes.setdefault((group, archive, path), []).append(
-                    (key, sg.texture_from_file(src, orig, flip=True)))
-        print(f'{rel}: changed')
+                sg_changes.setdefault((group, archive, path), []).append((key, encode(orig)))
+        print(f'{rel}: changed' + (f' (alpha from {Path(mrel).name})' if mask_changed else ''))
     imported = {}           # (group, archive, wad path) -> model with the edited OBJ / glTF geometry
+    models = dict(manifest.get('models', {}))
+    models.update({rel: {'sha1': None, 'target': t} for rel, t in untracked_models(pack, manifest).items()})
     # glTF first (it carries the decal UVs): an OBJ edited as well for the same model is ignored
-    for rel, info in sorted(manifest.get('models', {}).items(), key=lambda kv: not kv[0].endswith('.glb')):
+    for rel, info in sorted(models.items(), key=lambda kv: not kv[0].endswith('.glb')):
         if not (pack / rel).exists() or sha1(pack / rel) == info['sha1']:
             continue
-        print(f'{rel}: changed')
         group, (archive, path) = group_of(rel), info['target']
         if (group, archive, path) in imported:
-            print(f'  ignored: the .glb of this model was edited too and is used')
+            print(f'{rel}: ignored, the .glb of this model is used')
             continue
+        print(f'{rel}: ' + ('changed' if info['sha1'] else 'not in template.json (pack made without 3D models): '
+                            'imported'))
         if rel.endswith('.glb'):
             src = (pack / rel).read_bytes()
             load = lambda data, **kw: sg.import_gltf(data, src, base_dir=(pack / rel).parent, **kw)  # noqa: E731

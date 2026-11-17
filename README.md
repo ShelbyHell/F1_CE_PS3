@@ -277,6 +277,7 @@ are kept on a Deck too.
 | `F1CE_LLAR_SPIN=1` | SPU threads polling an unchanged line with GETLLAR keep spinning instead of yielding (before 2026-11-09): A/B |
 | `F1CE_CPUS=<n>` | runs on the first n logical processors only (Windows), to estimate smaller machines: 8 = 4 cores / 8 threads like a Steam Deck (whose cores are slower) |
 | `F1CE_THREAD_CPU=1` | with the `cpu:` line every 5 s: the cores each thread used (threads are named) |
+| `F1CE_MEM_LOG=<s>`, `F1CE_MEM_HEAPS=1` | `mem:` + `rsx mem:` lines every s seconds (default 30, 0 = off): working set and committed RAM, the resident part of each guest range, GPU memory of the process (DXGI: local / shared), the renderer's caches. `F1CE_MEM_HEAPS=1` adds every heap's bytes in use and its largest allocation sizes (slow: a hitch per line) |
 | `F1CE_TICKS_FIXED=1` | with `F1CE_60FPS`: exactly one tick per frame whatever the time (with frame dumps, to see per-tick motion) |
 | `F1CE_USLEEP_LOG=1` | `sys_timer_usleep` requests per second by size, and the callers of short ones |
 | `F1CE_AUDIO3D_HZ=<n>` | experiment: each 3D sound source (volume, pan, Doppler; fn 0x5C8260) is updated at most n times per second, on an n Hz grid (30 = the PS3's rate; the game sends one update per frame, so 60 with `F1CE_60FPS`). Launcher field |
@@ -310,6 +311,9 @@ are kept on a Deck too.
 | `F1CE_WINDOW=<w>x<h>`, `F1CE_STRETCH=1` | initial window size / fill the window instead of keeping the internal image's aspect ratio (black bars) |
 | `F1CE_COMPILE_THREADS=<n>`, `F1CE_NATIVE_GLSL=1` | shader compile threads (default 1) / the scale-1 shader sources of before |
 | `F1CE_NO_PRECOMPILE=1` | skips the start-up shader phase (the program database is still recorded) |
+| `F1CE_TEX_EVICT_S=<s>` | Textures no draw has used for s seconds are released (default 180, 0 = never); Vulkan also releases render targets neither drawn into nor sampled for as long |
+| `F1CE_MEM_TARGETS=1` | Vulkan: with each `rsx mem:` line, a `rsx target:` line per render target (size, frames since last drawn into / sampled) |
+| `F1CE_GL_PRELOAD=1` | OpenGL: every program of the database stays linked for the whole session (up to 0.4.1; ~1.2 MB of RAM per program on AMD, +1 GB). By default the start-up phase only makes sure each one has a cached binary, loaded when first drawn |
 | `F1CE_NO_LINEGEN=1` | SPU PUTLLC compares the line data only (no write generation: the old behaviour) |
 | `F1CE_SCALE=1..4`, `<w>x<h>`, `480p`, `576p` | internal resolution (x 1280x720; 1.5 = 1920x1080, 3 = 3840x2160): fractions allowed, supersampled to the window. `<w>x<h>` (640x360 to 5120x2880), at another aspect ratio: the 3D scene takes that ratio and a wider field of view, its interface stays 16:9 in the middle, menus are 16:9 between black bars (`runtime/hle_aspect.cpp`). `480p`, `576p` (`:4x3` for 4:3): the PS3's own video modes, with the game's layouts for them |
 | `F1CE_MSAA=1/2/4/8` | samples of the targets the game antialiases (default 4, as on the RSX; 1 = off, launcher "Off") |
@@ -319,7 +323,7 @@ are kept on a Deck too.
 | `F1CE_60FPS=1` | up to 60 fps with the game speed unchanged (ticks per frame follow the frame time); a stopped car in a race stays at 30 fps (`F1CE_60FPS_NOHOLD=1` turns that off) |
 | `F1CE_RAIN_SMOOTH=0` | the rain drops on the screen as the game's water map gives them (default: read through a 3x3 tent filter, see the 2026-11-03 rain entry) |
 | `F1CE_CUBE_FACES=1..6` | reflection cube map faces rendered per frame, in turn (default 6, as on the RSX; saves renderer time only, not the SPU jobs) |
-| `F1CE_CUBE_HZ=<n>` | reflection cube map updates per second at most (default 30 with `F1CE_60FPS`, as the original game at 30 fps, else every frame; 0: every frame; `runtime/hle_cubemap.cpp`); `F1CE_CUBE_SKIP=1` never renders it (measurement only) |
+| `F1CE_CUBE_HZ=<n>` | reflection cube map updates per second at most (default 30 with `F1CE_60FPS`, as the original game at 30 fps, else every frame; 0: every frame; `half`: every frame with three of the six faces, alternating, ~30% less SPU work for the pass; `runtime/hle_cubemap.cpp`); `F1CE_CUBE_SKIP=1` never renders it (measurement only) |
 | `F1CE_SHADOW_RES=<k>` | shadow maps at k times their original 1024x2048 (0.5 = lighter on the GPU, 2 = sharper); default: they follow `F1CE_SCALE` like every render target |
 | `F1CE_CUBE_RES=<k>` | reflection cube map faces at k times their original 256x256, 0.25-4 (launcher "Reflection resolution"; default: they follow `F1CE_SCALE`) |
 | `F1CE_CUBE_DIST=<m>` | reflection distance: the cube faces' far plane at most m metres (original 1000) |
@@ -330,6 +334,7 @@ are kept on a Deck too.
 | `F1CE_MOTION_BLUR=0`, `F1CE_HEAT_HAZE=0` | no motion blur (the game's own Motion Blur.Enable read as off) / no heat haze behind the cars (the EngineHeat particle effect is never spawned); `runtime/hle_gfxopts.cpp` |
 | `F1CE_DOF=0`, `F1CE_BLOOM=0`, `F1CE_LIGHT_RAYS=0`, `F1CE_POSTFX=0` | the game's own Post Effects switches cleared every frame at the post-effects render (Depth Of Field / Bloom / Crob Rays .Enable); `F1CE_POSTFX=0` = all three plus motion blur and heat haze; `runtime/hle_gfxopts.cpp` |
 | `F1CE_ZPASS_LOG=1` | logs a burst of 200 occlusion reports (offset, count) every 10 s |
+| `F1CE_ZPASS_PRECISE=0` / `flip` | occlusion reports: by default the renderers write each report when the GPU is done with it, and `cellGcmSetFlip` waits (`wait_reports`, `runtime/hle_gcm.cpp`) until the reports of two frames ago are written, which the game reads in the next frame (`zpass:` line every 10 s); `0`: never waited for (late values); `flip`: all of a frame's reports written at its flip, the RSX thread waiting for the GPU (the old way, ~30% slower at the race start) |
 | `F1CE_SKIP_FN=<hex>,..` | measurement only: these render functions return at once (2f141c static shadows, 2f1bec blurred shadows, 43f620 shadow map, 43ffa0 shadow to alpha, 30388c cars); all of them log their calls per second (`skipfn:`, `runtime/hle_skipfn.cpp`) |
 | `F1CE_SPURS_SPUS=<n>` | SPU worker threads (default 5; 6 works, 7 and 8 hang at boot; 3 halves the grid fps) |
 | `F1CE_SPU_DMA_DIAG=1` | the per-DMA diagnostics of the SPURS workloads (off: they cost a shared atomic on every DMA) |

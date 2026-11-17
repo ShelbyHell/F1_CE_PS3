@@ -81,6 +81,18 @@ void evict_raw_regions() {
         } else ++it;
 }
 
+// the "rsx mem:" part common to both renderers: index lists / regions (with their host copies) and raw vertex regions
+std::string shared_mem_report() {
+    size_t host = g_idx_cache.size() * (sizeof(IdxEntry) + 32);
+    for (const auto& [k, r] : g_idx_regions) host += sizeof(r) + 32 + r.cpu.capacity() * 4 + r.minmax.size() * 40;
+    host += g_raw_regions.size() * (sizeof(RawRegion) + 32);
+    char b[256];
+    snprintf(b, sizeof(b), "index lists %zu + regions %zu, raw regions %zu (host ~%.1f MB) | vertex heap %.0f/%u MB, index arena %.0f/%u MB",
+             g_idx_cache.size(), g_idx_regions.size(), g_raw_regions.size(), host / 1048576.0, g_heap.used / 1048576.0,
+             g_heap.size >> 20, g_iheap.used / 1048576.0, g_iheap.size >> 20);
+    return b;
+}
+
 inline u32 g_first_attr(const u32* group_of, u32 g) {
     for (u32 i = 0; i < 16; i++) if (group_of[i] == g) return i;
     return 0;

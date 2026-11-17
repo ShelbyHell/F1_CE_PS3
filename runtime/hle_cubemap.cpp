@@ -38,6 +38,7 @@ const bool g_static = g_off || (g_mode && !strcmp(g_mode, "static")) ||
 u64 g_last_render = 0;
 u64 g_last_call = 0, g_scene_start = 0;
 bool g_skipped = false;   // the last pass was skipped: its fence wait goes too
+u32 g_face_mask = 0x3F;   // faces the last pass rendered (F1CE_CUBE_SPLIT)
 u32 g_renders = 0, g_skips = 0;
 u64 g_window = 0;
 
@@ -73,16 +74,54 @@ bool cube_render_hook(PPUContext&) {
 // 0x2F3B34: the other Render (seen once, at load)
 bool cube_render2_hook(PPUContext&) { return false; }
 // 0x2F0390: waits for the six faces' job fences
-bool cube_wait_hook(PPUContext&) {
-    if (!g_skipped) return false;
-    g_skipped = false;
+void sub_00551228(PPUContext& __restrict c);   // waits for a job fence (r3 = list, r4 = index)
+bool cube_wait_hook(PPUContext& c) {
+    if (g_skipped) {
+        g_skipped = false;
+        return true;
+    }
+    if (g_face_mask == 0x3F) return false;
+    // as the original (r3 = the cube; six fences of halfword index + word list at +16, 8 bytes each), for the faces
+    // the pass rendered only: the others' fences are a frame older and never come
+    const u32 cube = (u32)c.r[3], mask = g_face_mask;
+    const u64 lr = c.lr, sp = c.r[1];
+    const u32 fn = c.cur_fn;
+    g_face_mask = 0x3F;
+    if (!ld32(ld32((u32)c.r[2] - 4464))) return true;   // (the original waits only while this is set)
+    c.r[1] = sp - 128;   // (a frame of our own: the callee saves its link register in its caller's)
+    for (u32 i = 0; i < 6; i++) {
+        if (!(mask >> i & 1)) continue;
+        c.r[4] = ld16(cube + 16 + i * 8);
+        c.r[3] = ld32(cube + 20 + i * 8);
+        sub_00551228(c);
+    }
+    c.r[1] = sp;
+    c.lr = lr;
+    c.cur_fn = fn;
     return true;
 }
 // 0x43B528 (scene render), called by the cube pass at 0x2F0FB0 for each face with the main camera's near and far planes
 // in f1/f2 (0.1 and 1000 m)
+// The cube pass also passes a mask of the faces to render on its stack (r1 + 112 at the call, 0x3F = all six).
+// F1CE_CUBE_HZ=half (launcher "Every frame, 3 faces at a time"): a pass every frame with three faces, the other three
+// on the next (masks 0x07 / 0x38; F1CE_CUBE_SPLIT=1 does the same with any rate). Every face is renewed at half the pass
+// rate and the cube still changes every frame. Silverstone race start, 60 fps: draws 3161 -> 2943 per frame, SPU
+// instructions 60 -> 57 M per frame (~30% of the pass's; the rest does not depend on the faces), worst 5 s 42 -> 46 fps.
+// The main view's fence wait (cube_wait_hook) then waits for the rendered faces only (the others' never come: hang).
 bool cube_scene_hook(PPUContext& c) {
     if ((u32)c.lr != 0x2F0FB4) return false;
     if (g_off) c.f[2].d = 0.2;
     else if (g_dist > 0 && c.f[2].d > g_dist) c.f[2].d = g_dist;
+    static const bool split = (getenv("F1CE_CUBE_SPLIT") && atoi(getenv("F1CE_CUBE_SPLIT")) != 0) ||
+                              (getenv("F1CE_CUBE_HZ") && !strcmp(getenv("F1CE_CUBE_HZ"), "half"));
+    const u32 mask_ea = (u32)c.r[1] + 112;
+    if (split && !g_static && ld64(mask_ea) == 0x3F) {
+        static u32 half = 0;
+        // a scene's first pass renders all six (no old faces yet)
+        if (time_usec() - g_scene_start > 500000) {
+            g_face_mask = (half ^= 1) ? 0x07 : 0x38;
+            st64(mask_ea, g_face_mask);
+        }
+    }
     return false;
 }

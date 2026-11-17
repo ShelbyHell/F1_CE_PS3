@@ -64,6 +64,14 @@ void write_stat(u32 out, bool dir, u64 size) {
 }
 }  // namespace
 
+FILE* fopen_u8(const std::string& path, const char* mode) {
+#ifdef _WIN32
+    return _wfopen(stdfs::u8path(path).wstring().c_str(), std::wstring(mode, mode + strlen(mode)).c_str());
+#else
+    return fopen(path.c_str(), mode);
+#endif
+}
+
 std::string fs_host_path(const std::string& g) {
     auto starts = [&](const char* p) { return g.rfind(p, 0) == 0; };
     stdfs::path game = stdfs::u8path(g_game_dir);

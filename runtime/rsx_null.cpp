@@ -59,6 +59,7 @@ void method(u32 m, u32 arg) {
 }
 
 bool report(u32, u32) { return false; }
+std::string mem_report() { return "software renderer"; }
 void flip(u32 ea, u32 pitch, u32 width, u32 height) {
     static u32 n = 0;
     if (n == 1500) {
