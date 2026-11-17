@@ -3,7 +3,7 @@
 // Runs on the UI thread (host_sdl.cpp calls wheel_poll after each event pump): SDL's joystick state and DirectInput
 // effects stay on one thread; the usbd thread only exchanges WheelInput / WheelForces under g_mutex.
 // The wheel: the [wheel] device GUID, else the first joystick SDL calls a wheel or from a wheel vendor
-// (wheelcfg::vendor_name). Settings: runtime/wheel_config.h (the launcher's Steering Wheel tab writes them).
+// (wheelcfg::vendor_name), never the extra game controller a Fanatec base can show up with (wheelcfg::extras). Settings: runtime/wheel_config.h (the launcher's Steering Wheel tab writes them).
 // A separate pedal set (wheelcfg::Config::pedals_separate) is a second joystick read for the pedal axes only; it can be
 // plugged in and out on its own (pedals released while it is missing).
 // Measured on a Thrustmaster TX (2026-11-11): a positive constant force along +x turns the wheel towards negative axis
@@ -11,9 +11,11 @@
 #include "host.h"
 #include "kernel.h"
 #include "wheel_config.h"
+#include "wheel_joys.h"
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -37,6 +39,7 @@ SDL_Haptic* g_haptic = nullptr;
 SDL_JoystickID g_joy_id = 0;
 SDL_Joystick* g_ped = nullptr;   // the separate pedal set
 SDL_JoystickID g_ped_id = 0;
+wheelcfg::Twins g_twins;         // devices alike to the wheel, until one of them reports input
 u64 g_next_scan = 0, g_next_ped_scan = 0;
 bool g_logged_none = false, g_logged_no_pedals = false;
 
@@ -53,15 +56,17 @@ std::string ini_path() {
     return "f1ce_launcher.ini";   // (the game runs in the launcher's folder)
 }
 
-// the joysticks for wheelcfg::pick (ids: SDL_GetJoysticks, freed by the caller)
+// the joysticks for wheelcfg::pick (ids: SDL_GetJoysticks, freed by the caller); the extra devices skipped are logged
 std::vector<wheelcfg::Joy> joys(const SDL_JoystickID* ids, int n) {
-    std::vector<wheelcfg::Joy> v(n);
-    for (int i = 0; i < n; i++) {
-        char guid[64];
-        SDL_GUIDToString(SDL_GetJoystickGUIDForID(ids[i]), guid, sizeof(guid));
-        v[i] = {guid, SDL_GetJoystickTypeForID(ids[i]) == SDL_JOYSTICK_TYPE_WHEEL,
-                wheelcfg::vendor_name(SDL_GetJoystickVendorForID(ids[i])) != nullptr, SDL_IsGamepad(ids[i])};
-    }
+    std::vector<wheelcfg::Joy> v = wheelcfg::sdl_joys(ids, n);
+    const std::vector<bool> extra = wheelcfg::extras(v);
+    static std::vector<SDL_JoystickID> logged;
+    for (int i = 0; i < n; i++)
+        if (extra[i] && std::find(logged.begin(), logged.end(), ids[i]) == logged.end()) {
+            logged.push_back(ids[i]);
+            LOG_I("wheel: %s (%04x:%04x, %d axes, force feedback %s) is not the wheel itself", SDL_GetJoystickNameForID(ids[i]),
+                  v[i].vid, SDL_GetJoystickProductForID(ids[i]), v[i].axes, v[i].ffb ? "yes" : "no");
+        }
     return v;
 }
 
@@ -100,20 +105,43 @@ void open_pedals() {
           g_cfg.throttle.axis, g_cfg.brake.axis, g_cfg.clutch.axis);
 }
 
-void close_wheel() {
-    close_pedals();
+const char* path_of(SDL_Joystick* j) {
+    const char* p = SDL_GetJoystickPath(j);
+    return p ? p : "?";
+}
+
+void close_haptic() {
     if (g_haptic) {
         SDL_StopHapticEffects(g_haptic);
         SDL_CloseHaptic(g_haptic);
     }
-    if (g_joy) SDL_CloseJoystick(g_joy);
     g_haptic = nullptr;
-    g_joy = nullptr;
-    g_joy_id = 0;
     g_constant = g_spring = g_damper = g_friction = {};
     std::lock_guard lk(g_mutex);
-    g_input = {};
     g_ffb_on = false;
+}
+
+// the wheel's force feedback (g_cfg loaded); returns its features
+u32 open_haptic() {
+    g_haptic = g_cfg.ffb ? SDL_OpenHapticFromJoystick(g_joy) : nullptr;
+    const u32 feat = g_haptic ? SDL_GetHapticFeatures(g_haptic) : 0;
+    if (g_haptic && (feat & SDL_HAPTIC_GAIN)) SDL_SetHapticGain(g_haptic, std::clamp(g_cfg.gain, 0, 100));
+    if (g_haptic && (feat & SDL_HAPTIC_AUTOCENTER)) SDL_SetHapticAutocenter(g_haptic, 0);   // (the game's spring instead)
+    if (g_cfg.ffb && !g_haptic) LOG_W("wheel: no force feedback: %s", SDL_GetError());
+    std::lock_guard lk(g_mutex);
+    g_ffb_on = g_haptic != nullptr;
+    return feat;
+}
+
+void close_wheel() {
+    close_pedals();
+    close_haptic();
+    g_twins.close();
+    if (g_joy) SDL_CloseJoystick(g_joy);
+    g_joy = nullptr;
+    g_joy_id = 0;
+    std::lock_guard lk(g_mutex);
+    g_input = {};
 }
 
 void open_wheel() {
@@ -128,15 +156,23 @@ void open_wheel() {
     SDL_JoystickID* ids = SDL_GetJoysticks(&n);
     wheelcfg::pick(cfg, joys(ids, n), w, p);
     const SDL_JoystickID pick = w >= 0 ? ids[w] : 0;
-    SDL_free(ids);
     if (!pick) {
+        SDL_free(ids);
         if (!g_logged_none) LOG_I("wheel: none found%s%s", cfg.device.empty() ? "" : " with GUID ", cfg.device.c_str());
         g_logged_none = true;
         return;
     }
     g_joy = SDL_OpenJoystick(pick);
-    if (!g_joy) { LOG_W("wheel: %s", SDL_GetError()); return; }
+    if (!g_joy) {
+        SDL_free(ids);
+        LOG_W("wheel: %s", SDL_GetError());
+        return;
+    }
     g_joy_id = pick;
+    if (const int t = g_twins.open(ids, n, w, g_joy))
+        LOG_I("wheel: %d more device(s) named %s with its USB ids: the one that reports input is the wheel (now %s)", t,
+              SDL_GetJoystickName(g_joy), path_of(g_joy));
+    SDL_free(ids);
     // the vendor's layout, then the saved settings over it
     g_cfg = {};
     wheelcfg::defaults_for(g_cfg, SDL_GetJoystickVendor(g_joy));
@@ -144,10 +180,7 @@ void open_wheel() {
         auto it = ini.find(k);
         return it == ini.end() ? nullptr : it->second.c_str();
     });
-    g_haptic = g_cfg.ffb ? SDL_OpenHapticFromJoystick(g_joy) : nullptr;
-    const u32 feat = g_haptic ? SDL_GetHapticFeatures(g_haptic) : 0;
-    if (g_haptic && (feat & SDL_HAPTIC_GAIN)) SDL_SetHapticGain(g_haptic, std::clamp(g_cfg.gain, 0, 100));
-    if (g_haptic && (feat & SDL_HAPTIC_AUTOCENTER)) SDL_SetHapticAutocenter(g_haptic, 0);   // (the game's spring instead)
+    const u32 feat = open_haptic();
     LOG_I("wheel: %s %s (%04x:%04x), %d axes, %d buttons, %d hats, force feedback %s (features %08x); range %d, lock %d, "
           "steering axis %d, pedals %d %d %d",
           wheelcfg::vendor_name(SDL_GetJoystickVendor(g_joy)) ? wheelcfg::vendor_name(SDL_GetJoystickVendor(g_joy)) : "",
@@ -155,13 +188,20 @@ void open_wheel() {
           SDL_GetNumJoystickAxes(g_joy), SDL_GetNumJoystickButtons(g_joy), SDL_GetNumJoystickHats(g_joy),
           g_haptic ? "on" : g_cfg.ffb ? "unavailable" : "off", feat, g_cfg.range, g_cfg.lock, g_cfg.steer_axis,
           g_cfg.throttle.axis, g_cfg.brake.axis, g_cfg.clutch.axis);
-    {
-        std::lock_guard lk(g_mutex);
-        g_ffb_on = g_haptic != nullptr;
-    }
-    if (g_cfg.ffb && !g_haptic) LOG_W("wheel: no force feedback: %s", SDL_GetError());
     g_logged_none = false;
     open_pedals();
+}
+
+// a twin reported input while the wheel did not: it is the wheel (wheelcfg::Twins)
+void settle_twins() {
+    SDL_Joystick* t = g_twins.settle();
+    if (!t) return;
+    LOG_I("wheel: input from the other %s device (%s), not %s: using it", SDL_GetJoystickName(t), path_of(t), path_of(g_joy));
+    close_haptic();
+    SDL_CloseJoystick(g_joy);
+    g_joy = t;
+    g_joy_id = SDL_GetJoystickID(t);
+    open_haptic();
 }
 
 void read_input() {
@@ -331,12 +371,15 @@ void wheel_poll() {
         g_next_ped_scan = time_usec() + 1000000;
         open_pedals();
     }
+    settle_twins();
     read_input();   // (sets g_cfg.game_lock_seen)
     apply_ffb(g_cfg.steer(SDL_GetJoystickAxis(g_joy, g_cfg.steer_axis)));
 }
 void wheel_close() { close_wheel(); }
 // the gamepad of this joystick is the wheel or its pedal set (host_sdl.cpp leaves it alone)
-bool wheel_owns(SDL_JoystickID id) { return (g_joy && id == g_joy_id) || (g_ped && id == g_ped_id); }
+bool wheel_owns(SDL_JoystickID id) {
+    return (g_joy && (id == g_joy_id || g_twins.has(id))) || (g_ped && id == g_ped_id);
+}
 
 // Scripted wheel input for automated tests, F1CE_INPUT's clock and syntax: F1CE_WHEEL_INPUT="50:cross,55:throttle=1:60,
 // 58:steer=-0.4:2,60:gear=2:5" (buttons by their [wheel] key names; axes steer/throttle/brake/clutch with a value;

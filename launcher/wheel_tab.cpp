@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "../runtime/wheel_config.h"
+#include "../runtime/wheel_joys.h"
 
 namespace wheeltab {
 namespace {
@@ -115,9 +116,6 @@ void w_status(const std::wstring& s) {
     g_sh.st.status = w_last_status = s;
     g_sh.st.status_gen++;
 }
-bool is_wheel(SDL_JoystickID id) {
-    return SDL_GetJoystickTypeForID(id) == SDL_JOYSTICK_TYPE_WHEEL || wheelcfg::vendor_name(SDL_GetJoystickVendorForID(id));
-}
 std::string guid_of(SDL_JoystickID id) {
     char g[64];
     SDL_GUIDToString(SDL_GetJoystickGUIDForID(id), g, sizeof(g));
@@ -157,13 +155,19 @@ void w_list() {
     std::vector<Device> devs;
     int n = 0;
     SDL_JoystickID* ids = SDL_GetJoysticks(&n);
+    // (an extra device of a wheel is "not a wheel", left out if it has the wheel's GUID: wheelcfg::extras)
+    const std::vector<wheelcfg::Joy> joys = wheelcfg::sdl_joys(ids, n);
+    const std::vector<bool> extra = wheelcfg::extras(joys);
     for (int i = 0; i < n; i++) {
-        const char* vendor = wheelcfg::vendor_name(SDL_GetJoystickVendorForID(ids[i]));
+        bool twinned = false;
+        for (int k = 0; k < n && !twinned; k++) twinned = k != i && joys[k].guid == joys[i].guid && !extra[k];
+        if (extra[i] && twinned) continue;
+        const char* vendor = wheelcfg::vendor_name(joys[i].vid);
         std::string label = SDL_GetJoystickNameForID(ids[i]) ? SDL_GetJoystickNameForID(ids[i]) : "Joystick";
         if (vendor && label.find(vendor) == std::string::npos) label = std::string(vendor) + " " + label;
-        const bool wheel = is_wheel(ids[i]);
+        const bool wheel = wheelcfg::wheel_like(joys[i]) && !extra[i];
         if (!wheel) label += " (not a wheel)";
-        devs.push_back({guid_of(ids[i]), widen(label), wheel});
+        devs.push_back({joys[i].guid, widen(label), wheel});
     }
     SDL_free(ids);
     std::lock_guard<std::mutex> l(g_sh.m);
@@ -176,11 +180,12 @@ void w_list() {
 
 // opens the wanted wheel (or the first one), as the game picks it
 void w_open(const Want& want) {
-    int n = 0;
+    int n = 0, wi = -1, pi = -1;
     SDL_JoystickID* ids = SDL_GetJoysticks(&n);
-    SDL_JoystickID pick = 0;
-    for (int i = 0; i < n && !pick; i++)
-        if (want.guid.empty() ? is_wheel(ids[i]) : guid_of(ids[i]) == want.guid) pick = ids[i];
+    wheelcfg::Config c;
+    c.device = want.guid;
+    wheelcfg::pick(c, wheelcfg::sdl_joys(ids, n), wi, pi);
+    const SDL_JoystickID pick = wi >= 0 ? ids[wi] : 0;
     SDL_free(ids);
     if (pick && w_joy && SDL_GetJoystickID(w_joy) == pick) return;
     if (w_joy) w_close();

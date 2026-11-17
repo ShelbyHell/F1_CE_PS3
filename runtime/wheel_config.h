@@ -63,7 +63,7 @@ struct Config {
     // force feedback, percent
     bool ffb = true;
     bool ffb_invert = false;
-    int gain = 100, constant = 100, spring = 100, damper = 100, friction = 100;
+    int gain = 100, constant = 30, spring = 100, damper = 100, friction = 100;   // (constant: full strength felt too strong)
     int min_force = 0;                // added to any constant force (wheels with a dead zone in their motor)
     int weight = 25;                  // a damper that always plays (steadies strong direct-drive wheels)
     bool soft_lock = true;            // pushes back beyond the game's steering lock
@@ -133,34 +133,68 @@ struct Joy {
     bool wheel_type = false;   // SDL calls it a wheel
     bool vendor = false;       // from a wheel vendor (vendor_name): their pedal sets too
     bool gamepad = false;      // SDL maps it as a gamepad
+    unsigned vid = 0;
+    // opened to tell a wheel's real device from an extra one (runtime/wheel_joys.h): axes -1 = not opened
+    bool ffb = false;
+    int axes = -1;
 };
+inline bool wheel_like(const Joy& j) { return j.wheel_type || j.vendor; }
+// the wheel candidates that are not the wheel itself: no axes, or no force feedback while another candidate has it.
+// Fanatec bases can show up as two game controllers, often with the same GUID, and only one of them is the wheel
+// (which comes first in the list varies); a wheel vendor's pedal set or shifter is not the wheel either.
+inline std::vector<bool> extras(const std::vector<Joy>& joys) {
+    bool any_ffb = false;
+    for (const Joy& j : joys) any_ffb |= wheel_like(j) && j.ffb;
+    std::vector<bool> v(joys.size());
+    for (size_t i = 0; i < joys.size(); i++) {
+        const Joy& j = joys[i];
+        // (SDL gives no force feedback for a joystick it maps as a gamepad: that says nothing)
+        v[i] = wheel_like(j) && j.axes >= 0 && (j.axes == 0 || (any_ffb && !j.ffb && !j.gamepad));
+    }
+    return v;
+}
 // the game's and the launcher's choice (indices into joys, -1: none). The wheel: the device GUID, else the first wheel
 // (with a separate pedal set: not the pedals' device, and SDL's wheels before the vendors' other devices, since a
-// Fanatec or MOZA pedal set has the vendor's USB id too). The pedal set: its GUID, else the first other joystick that
-// is not a gamepad, a wheel vendor's first.
+// Fanatec or MOZA pedal set has the vendor's USB id too); real devices before extras (see extras), also when an extra
+// shares the device GUID or an extra's GUID was saved (then the vendor's real one). The pedal set: its GUID, else the
+// first other joystick that is not a gamepad, a wheel vendor's first, never one with force feedback or no axes.
 inline void pick(const Config& c, const std::vector<Joy>& joys, int& wheel, int& pedals) {
     const int n = (int)joys.size();
     wheel = pedals = -1;
     const bool sep = c.pedals_separate;
-    auto first = [&](auto ok) {
-        for (int i = 0; i < n; i++)
-            if (ok(joys[i])) return i;
+    const std::vector<bool> extra = extras(joys);
+    auto first = [&](auto ok) {   // a real one, else an extra
+        for (int pass = 0; pass < 2; pass++)
+            for (int i = 0; i < n; i++)
+                if ((pass || !extra[i]) && ok(joys[i])) return i;
         return -1;
     };
-    if (!c.device.empty()) wheel = first([&](const Joy& j) { return j.guid == c.device; });
-    else if (!sep) wheel = first([](const Joy& j) { return j.wheel_type || j.vendor; });
+    auto not_pedals = [&](const Joy& j) { return c.pedals_device.empty() || j.guid != c.pedals_device; };
+    if (!c.device.empty()) {
+        wheel = first([&](const Joy& j) { return j.guid == c.device; });
+        if (wheel >= 0 && extra[wheel]) {
+            const unsigned vid = joys[wheel].vid;
+            for (int i = 0; i < n; i++)
+                if (!extra[i] && wheel_like(joys[i]) && joys[i].vid == vid && not_pedals(joys[i])) { wheel = i; break; }
+        }
+    } else if (!sep) wheel = first([](const Joy& j) { return wheel_like(j); });
     else {
-        auto not_pedals = [&](const Joy& j) { return c.pedals_device.empty() || j.guid != c.pedals_device; };
         wheel = first([&](const Joy& j) { return j.wheel_type && not_pedals(j); });
-        if (wheel < 0) wheel = first([&](const Joy& j) { return j.vendor && not_pedals(j); });
+        if (wheel < 0 || extra[wheel]) {
+            const int v = first([&](const Joy& j) { return j.vendor && not_pedals(j); });
+            if (wheel < 0 || (v >= 0 && !extra[v])) wheel = v;
+        }
     }
     if (!sep) return;
     auto other = [&](int i) { return i != wheel && (wheel < 0 || joys[i].guid != joys[wheel].guid); };
-    for (int i = 0; i < n && pedals < 0; i++)
-        if (other(i) && (!c.pedals_device.empty() ? joys[i].guid == c.pedals_device : !joys[i].gamepad && joys[i].vendor))
-            pedals = i;
+    auto pedal_like = [&](int i) { return !joys[i].ffb && joys[i].axes != 0; };
+    for (int pass = 0; pass < 2 && pedals < 0 && !c.pedals_device.empty(); pass++)   // (pass 0: not an extra copy)
+        for (int i = 0; i < n && pedals < 0; i++)
+            if (other(i) && joys[i].guid == c.pedals_device && (pass || pedal_like(i))) pedals = i;
     for (int i = 0; i < n && pedals < 0 && c.pedals_device.empty(); i++)
-        if (other(i) && !joys[i].gamepad) pedals = i;
+        if (other(i) && pedal_like(i) && !joys[i].gamepad && joys[i].vendor) pedals = i;
+    for (int i = 0; i < n && pedals < 0 && c.pedals_device.empty(); i++)
+        if (other(i) && pedal_like(i) && !joys[i].gamepad) pedals = i;
 }
 
 // ------------------------------------------------------------------ the ini section

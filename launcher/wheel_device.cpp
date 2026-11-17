@@ -1,11 +1,14 @@
 #include "wheel_device.h"
 
+#include "../runtime/wheel_joys.h"
+
 #include <SDL3/SDL.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <map>
 #include <mutex>
 #include <thread>
 
@@ -36,6 +39,7 @@ void post(std::function<void()> job) {
 SDL_Joystick* w_joy = nullptr;
 SDL_Joystick* w_ped = nullptr;          // the separate pedal set
 SDL_Haptic* w_haptic = nullptr;
+wheelcfg::Twins w_twins;                // devices alike to the wheel, until one of them reports input
 bool w_haptic_sys = false;              // SDL_INIT_HAPTIC done
 int w_test_ids[4] = {-1, -1, -1, -1};   // the test effects (constant, spring, sine)
 std::string w_last_status;
@@ -45,9 +49,6 @@ void w_status(const std::string& s) {
     g_sh.st.status = w_last_status = s;
     g_sh.st.status_gen++;
 }
-bool is_wheel(SDL_JoystickID id) {
-    return SDL_GetJoystickTypeForID(id) == SDL_JOYSTICK_TYPE_WHEEL || wheelcfg::vendor_name(SDL_GetJoystickVendorForID(id));
-}
 std::string guid_of(SDL_JoystickID id) {
     char g[64];
     SDL_GUIDToString(SDL_GetJoystickGUIDForID(id), g, sizeof(g));
@@ -55,10 +56,7 @@ std::string guid_of(SDL_JoystickID id) {
 }
 // the wheel and the pedal set the game would take (ids[] indices, -1: none)
 void w_pick(const Want& want, const SDL_JoystickID* ids, int n, int& wheel, int& pedals) {
-    std::vector<wheelcfg::Joy> joys(n);
-    for (int i = 0; i < n; i++)
-        joys[i] = {guid_of(ids[i]), SDL_GetJoystickTypeForID(ids[i]) == SDL_JOYSTICK_TYPE_WHEEL,
-                   wheelcfg::vendor_name(SDL_GetJoystickVendorForID(ids[i])) != nullptr, SDL_IsGamepad(ids[i])};
+    const std::vector<wheelcfg::Joy> joys = wheelcfg::sdl_joys(ids, n);
     wheelcfg::Config c;
     c.device = want.guid;
     c.pedals_separate = want.pedals;
@@ -86,6 +84,7 @@ void w_close_pedals() {
 void w_close() {
     w_close_pedals();
     w_close_haptic();
+    w_twins.close();
     if (w_joy) SDL_CloseJoystick(w_joy);
     w_joy = nullptr;
     std::lock_guard<std::mutex> l(g_sh.m);
@@ -108,15 +107,24 @@ void w_describe() {
     w_status(b);
 }
 
-// the device list, when it changed
+// the device list, when it changed: one entry per GUID (a real device's before an extra's); an extra device of a
+// wheel is "not a wheel"; devices of the same name numbered (a Fanatec base's twins: either finds the live one)
 void w_list() {
     std::vector<Device> devs;
     int n = 0;
     SDL_JoystickID* ids = SDL_GetJoysticks(&n);
+    const std::vector<wheelcfg::Joy> joys = wheelcfg::sdl_joys(ids, n);
+    const std::vector<bool> extra = wheelcfg::extras(joys);
+    std::map<std::string, int> names;
     for (int i = 0; i < n; i++) {
-        std::string label = w_label(wheelcfg::vendor_name(SDL_GetJoystickVendorForID(ids[i])), SDL_GetJoystickNameForID(ids[i]));
-        const bool wheel = is_wheel(ids[i]);
-        devs.push_back({guid_of(ids[i]), wheel ? label : label + " (not a wheel)", label, wheel});
+        bool listed = false;
+        for (int k = 0; k < n && !listed; k++)
+            listed = k != i && joys[k].guid == joys[i].guid && (extra[k] == extra[i] ? k < i : !extra[k]);
+        if (listed) continue;
+        std::string label = w_label(wheelcfg::vendor_name(joys[i].vid), SDL_GetJoystickNameForID(ids[i]));
+        if (const int nth = ++names[label]; nth > 1) label += " (" + std::to_string(nth) + ")";
+        const bool wheel = wheelcfg::wheel_like(joys[i]) && !extra[i];
+        devs.push_back({joys[i].guid, wheel ? label : label + " (not a wheel)", label, wheel});
     }
     SDL_free(ids);
     std::lock_guard<std::mutex> l(g_sh.m);
@@ -142,32 +150,13 @@ void w_open_pedals(SDL_JoystickID pick) {
     st.ped_open_gen++;
 }
 
-// opens the wanted wheel (or the first one) and pedal set, as the game picks them
-void w_open(const Want& want) {
-    int n = 0, wi = -1, pi = -1;
-    SDL_JoystickID* ids = SDL_GetJoysticks(&n);
-    w_pick(want, ids, n, wi, pi);
-    const SDL_JoystickID pick = wi >= 0 ? ids[wi] : 0, ped = pi >= 0 ? ids[pi] : 0;
-    SDL_free(ids);
-    w_open_pedals(want.pedals ? ped : 0);
-    if (pick && w_joy && SDL_GetJoystickID(w_joy) == pick) return;
-    if (w_joy) {
-        w_close();
-        w_open_pedals(want.pedals ? ped : 0);   // (w_close closed it too)
-    }
-    if (!pick) {
-        const std::string s = want.guid.empty() ? "No wheel found. Connect it (and install its driver): it shows up here."
-                                                : "The selected wheel is not connected.";
-        if (s != w_last_status) w_status(s);
-        return;
-    }
-    w_joy = SDL_OpenJoystick(pick);
-    if (!w_joy) return;
+// w_joy is the open wheel now
+void w_opened() {
     {
         std::lock_guard<std::mutex> l(g_sh.m);
         State& st = g_sh.st;
         st.open = true;
-        st.guid = guid_of(pick);
+        st.guid = guid_of(SDL_GetJoystickID(w_joy));
         st.name = w_label(wheelcfg::vendor_name(SDL_GetJoystickVendor(w_joy)), SDL_GetJoystickName(w_joy));
         st.vid = SDL_GetJoystickVendor(w_joy);
         st.pid = SDL_GetJoystickProduct(w_joy);
@@ -177,6 +166,45 @@ void w_open(const Want& want) {
         st.open_gen++;
     }
     w_describe();
+}
+
+// opens the wanted wheel (or the first one) and pedal set, as the game picks them
+void w_open(const Want& want) {
+    int n = 0, wi = -1, pi = -1;
+    SDL_JoystickID* ids = SDL_GetJoysticks(&n);
+    w_pick(want, ids, n, wi, pi);
+    const SDL_JoystickID pick = wi >= 0 ? ids[wi] : 0, ped = pi >= 0 ? ids[pi] : 0;
+    w_open_pedals(want.pedals ? ped : 0);
+    // (the open wheel may be the twin of the pick that reported input)
+    if (pick && w_joy && (SDL_GetJoystickID(w_joy) == pick || (w_twins.has(pick) && w_twins.has(SDL_GetJoystickID(w_joy))))) {
+        SDL_free(ids);
+        return;
+    }
+    if (w_joy) {
+        w_close();
+        w_open_pedals(want.pedals ? ped : 0);   // (w_close closed it too)
+    }
+    if (!pick) {
+        SDL_free(ids);
+        const std::string s = want.guid.empty() ? "No wheel found. Connect it (and install its driver): it shows up here."
+                                                : "The selected wheel is not connected.";
+        if (s != w_last_status) w_status(s);
+        return;
+    }
+    w_joy = SDL_OpenJoystick(pick);
+    if (w_joy) w_twins.open(ids, n, wi, w_joy);
+    SDL_free(ids);
+    if (w_joy) w_opened();
+}
+
+// a twin of the wheel reported input while the wheel did not: it is the wheel (wheelcfg::Twins)
+void w_settle_twins() {
+    SDL_Joystick* t = w_twins.settle();
+    if (!t) return;
+    w_close_haptic();
+    SDL_CloseJoystick(w_joy);
+    w_joy = t;
+    w_opened();
 }
 
 // effects need the haptic device, opened on the first test (only one process can own it)
@@ -270,6 +298,7 @@ void worker() {
         }
         if (!want.open && (w_joy || w_ped)) w_close();
         if (!want.haptic && w_haptic) w_close_haptic();
+        if (w_joy) w_settle_twins();
         for (auto& j : jobs) j();
         if (w_joy && !w_haptic_sys) {   // (the slowest part last: the wheel's input shows first)
             w_haptic_sys = SDL_InitSubSystem(SDL_INIT_HAPTIC);

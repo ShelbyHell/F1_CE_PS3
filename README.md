@@ -165,6 +165,18 @@ attached the game makes it the player's controller (the pad's ✕ no longer star
   SDL's wheel type before a wheel vendor's other devices (Fanatec/MOZA pedals carry the vendor's USB id); the pedal
   set is the first other non-gamepad joystick, a wheel vendor's first. The game rescans every second while the set
   is missing (pedals read as released) and logs `wheel: pedal set ...`.
+- A Fanatec base can show up as two game controllers (DirectInput), often with the same GUID, and only one is the
+  wheel; which comes first varies. With two or more wheel candidates, `runtime/wheel_joys.h` opens each once (kept
+  per SDL id) for its force feedback and axis count, and `wheelcfg::extras` marks the ones with no axes, or without
+  force feedback while another candidate has it: `pick` takes real devices first (also among same-GUID twins, and a
+  saved extra's GUID falls back to the same vendor's real device), never a force-feedback or axis-less device as the
+  pedal set. The launchers list an extra as "not a wheel" (left out when it shares the wheel's GUID); the game logs
+  `wheel: ... is not the wheel itself`.
+- Twins: a tester's Fanatec showed two "FANATEC Wheel" devices alike in force feedback and axes, one with no input.
+  `wheelcfg::Twins` (wheel_joys.h) opens the devices with the wheel's name and USB ids beside it and, 0.3 s after
+  opening, takes the first one whose axes (more than 1000), buttons or hat change while the wheel's do not (force
+  feedback moves with it). Game log: `wheel: N more device(s) named ...` and `wheel: input from the other ... device
+  (<path>) ...: using it`. The ImGui launcher lists one entry per GUID and numbers devices of the same name.
 - Buttons, measured on the controller's action flags: G25 byte 1 bits 0/1 (the paddles) = gear up/down, Start =
   pause, R2 = look back, L2 = change camera, Select, ✕ accept / ◯ back in menus, the hat = d-pad (in-race menus).
 - Force feedback: the game sends the Logitech classic protocol, but its send path 0x558160 overwrites byte 0 (slot and

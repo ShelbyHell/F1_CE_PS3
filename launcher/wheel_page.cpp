@@ -55,6 +55,7 @@ std::string g_status = "Looking for wheels...", g_profile;
 unsigned g_prev_buttons[2] = {};
 int g_test = 0;
 int g_index = 0;   // the row being drawn
+bool g_grey = false;   // the rows drawn now are greyed out: their setting does nothing (the wheel or its forces off)
 
 struct Profile { std::string file, name, wheels, notes; };
 std::vector<Profile> g_profiles;
@@ -366,7 +367,7 @@ void pedal_bar(int p, bool focused) {
 // ---------------------------------------------------------------- rows
 ui::RowOut row(const std::string& label, const std::string& value, bool arrows, const char* help) {
     ImGui::PushID(g_index);
-    const ui::RowOut r = ui::row_widget("r", label, value, g_index++, arrows, false, help, nullptr);
+    const ui::RowOut r = ui::row_widget("r", label, value, g_index++, arrows, false, help, nullptr, g_grey);
     ImGui::PopID();
     if (r.delta || r.activated) g_fresh = false;
     return r;
@@ -384,21 +385,20 @@ void toggle(const std::string& label, bool& v, const char* help) {
     const ui::RowOut r = row(label, v ? "On" : "Off", true, help);
     if (r.delta || r.activated) v = !v;
 }
-// a choice among n labels, stepped by left / right, listed by ✕
-template <typename Label>
-bool choice(const std::string& label, int& sel, int n, Label name, const char* help) {
+// a choice among n labels, stepped by left / right, listed by ✕; set(i) stores choice i (also later, from the list:
+// it must not refer to the caller's locals)
+template <typename Label, typename Set>
+void choice(const std::string& label, int sel, int n, Label name, Set set, const char* help) {
     const ui::RowOut r = row(label, name(sel), true, help);
-    if (r.delta) {
-        sel = (sel + r.delta + n) % n;
-        return true;
-    }
+    if (r.delta) set((sel + r.delta + n) % n);
     if (r.activated) {
         std::vector<std::string> items;
         for (int i = 0; i < n; i++) items.push_back(name(i));
-        int* target = &sel;
-        ui::open_list(items, sel, [target](int i) { *target = i; });
+        ui::open_list(items, sel, [set](int i) {
+            set(i);
+            g_fresh = false;
+        });
     }
-    return false;
 }
 }  // namespace
 
@@ -467,6 +467,7 @@ int rows() {
     };
 
     ui::header_widget("Wheel");
+    g_grey = !g_cfg.enabled;
     {   // the device: Automatic, the connected ones, a saved one that is not plugged in
         std::vector<std::pair<std::string, std::string>> devs = {{"", "Automatic (the first wheel found)"}};
         for (const wheeldev::Device& d : g_st.devices) devs.push_back({d.guid, d.label});
@@ -491,9 +492,11 @@ int rows() {
             ui::open_list(items, sel, [devs, pick](int i) { pick(devs[i].first); });
         }
     }
+    g_grey = false;
     toggle("Use the wheel in the game", g_cfg.enabled,
            "The game sees it as a Logitech G25 (its own wheel support, with force feedback). With a wheel the game "
            "makes it the player's controller.");
+    g_grey = !g_cfg.enabled;
     {
         const ui::RowOut r = row("Profile", g_profile.empty() ? "(none)" : g_profile, false,
                                  "Settings for a wheel, kept in the wheels folder next to the launcher: select to list them, "
@@ -516,11 +519,8 @@ int rows() {
     }
 
     ui::header_widget("Steering");
-    {
-        int a = g_cfg.steer_axis + 1;
-        choice("Steering axis", a, AXES + 1, [](int i) { return axis_label(i - 1); }, "The wheel's steering axis.");
-        g_cfg.steer_axis = a - 1;
-    }
+    choice("Steering axis", g_cfg.steer_axis + 1, AXES + 1, [](int i) { return axis_label(i - 1); },
+           [](int i) { g_cfg.steer_axis = i - 1; }, "The wheel's steering axis.");
     toggle("Invert steering", g_cfg.steer_invert, "For wheels whose axis goes the other way.");
     if (row("Centre", "Set now", false, "Hold the wheel straight and select this row: its position becomes the centre.").activated)
         g_cfg.steer_center = axis(g_cfg.steer_axis);
@@ -533,9 +533,9 @@ int rows() {
             if (LOCKS[i] == g_cfg.lock) li = i;
         choice("Steering lock", li, LOCK_N,
                [](int i) { return LOCKS[i] ? std::to_string(LOCKS[i]) + "°" : std::string("Game's (900°)"); },
+               [](int i) { g_cfg.lock = LOCKS[i]; },
                "The wheel turn that gives full steering in the game. Smaller: quicker steering (the rest of the "
                "wheel's rotation is the soft lock).");
-        g_cfg.lock = LOCKS[li];
     }
     slider("Steering dead zone", g_cfg.steer_deadzone, 0, 10, 1, "%", "Wheel movement around the centre that does nothing.");
 
@@ -584,7 +584,7 @@ int rows() {
         ImGui::PushID(g_index);
         ui::RowOut r = ui::row_widget("r", "Axis", cal ? "Press it fully..." : axis_label(p.axis), g_index++, true, false,
                                       "Select: press the pedal all the way down and let it go, to find its axis and range. "
-                                      "Left / right: pick the axis by hand.", &focused);
+                                      "Left / right: pick the axis by hand.", &focused, g_grey);
         ImGui::PopID();
         pedal_bar(i, focused);
         if (r.activated) calibrate_start(i);
@@ -604,31 +604,33 @@ int rows() {
 
     ui::header_widget("Force feedback");
     toggle("Force feedback", g_cfg.ffb, "The game's forces on the wheel.");
+    g_grey = !g_cfg.enabled || !g_cfg.ffb;
     toggle("Invert forces", g_cfg.ffb_invert, "For wheels that push the wrong way.");
     toggle("Soft lock", g_cfg.soft_lock, "Pushes back when the wheel turns past the game's steering lock.");
     for (const Gain& g : GAINS)
         if (slider(g.label, g_cfg.*g.v, 0, g.max, g.max >= 100 ? 5 : 1, "%", g.help) && g.v == &wheelcfg::Config::gain)
             wheeldev::set_gain(g_cfg.gain);
-    {
-        int fixed = g_cfg.autocenter >= 0;
-        choice("Auto-centre", fixed, 2, [](int i) { return std::string(i ? "Fixed spring" : "By the game"); },
-               "The game's centring spring, or a fixed one of the strength below.");
-        if (fixed && g_cfg.autocenter < 0) g_cfg.autocenter = 30;
-        if (!fixed) g_cfg.autocenter = -1;
-        if (fixed) slider("Auto-centre strength", g_cfg.autocenter, 0, 100, 5, "%", "The fixed centring spring's strength.");
-    }
+    choice("Auto-centre", g_cfg.autocenter >= 0, 2, [](int i) { return std::string(i ? "Fixed spring" : "By the game"); },
+           [](int i) {
+               if (!i) g_cfg.autocenter = -1;
+               else if (g_cfg.autocenter < 0) g_cfg.autocenter = 30;
+           },
+           "The game's centring spring, or a fixed one of the strength below.");
+    if (g_cfg.autocenter >= 0)
+        slider("Auto-centre strength", g_cfg.autocenter, 0, 100, 5, "%", "The fixed centring spring's strength.");
     {
         const ui::RowOut r = row("Test effect", TESTS[g_test], true,
                                  "Left / right: pick an effect. Select: plays it with the settings above.");
         if (r.delta) g_test = (g_test + r.delta + 5) % 5;
         if (r.activated) wheeldev::test(g_cfg, g_test);
     }
+    g_grey = !g_cfg.enabled;
     ui::header_widget("Buttons (select a row, then press the wheel's button)");
     auto button_row = [&](const std::string& label, int& b, const char* help) {
         int v = b + 1;
         bool focused = false;
         ImGui::PushID(g_index);
-        const ui::RowOut r = ui::row_widget("r", label, button_label(b), g_index++, true, false, help, &focused);
+        const ui::RowOut r = ui::row_widget("r", label, button_label(b), g_index++, true, false, help, &focused, g_grey);
         ImGui::PopID();
         if (r.delta) v = (v + r.delta + BUTTON_CHOICES + 1) % (BUTTON_CHOICES + 1);
         if (r.activated) {
@@ -637,7 +639,7 @@ int rows() {
             int* target = &b;
             ui::open_list(items, v, [target](int i) { *target = i - 1; g_fresh = false; });
         }
-        if (focused && g_st.open)
+        if (focused && g_st.open && !g_grey)
             if (const int pressed = newly_pressed(); pressed >= 0 && pressed < BUTTON_CHOICES) v = pressed + 1;
         if (v != b + 1) {
             b = v - 1;
@@ -650,6 +652,7 @@ int rows() {
     for (int i = 0; i < wheelcfg::GEARS; i++)
         button_row(i ? "Gear " + std::to_string(i) : std::string("Reverse"), g_cfg.gears[i], "The shifter position's button.");
 
+    g_grey = false;
     sync_pedals();
     return g_index;
 }
