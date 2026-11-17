@@ -721,7 +721,8 @@ Surface* bind_target() {
         depth = g_cur_depth->tex;
     }
     s->attached_depth = depth;
-    static const bool no_msaa = getenv("F1CE_NO_MSAA") != nullptr;
+    // F1CE_MSAA=1: antialiasing off (the launcher's "Off"); F1CE_NO_MSAA: the same, debug name
+    static const bool no_msaa = getenv("F1CE_NO_MSAA") || (getenv("F1CE_MSAA") && atoi(getenv("F1CE_MSAA")) == 1);
     s->ms_active = !main && ((fmt >> 12) & 0xF) && !no_msaa;
     if (s->ms_active) ensure_ms(s);
     return s;

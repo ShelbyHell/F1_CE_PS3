@@ -24,10 +24,10 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "generated"
 CHUNK = 400
 HOOKS = {0x3FB310: "camera_projection_hook",   # camera projection and frustum, see runtime/hle_aspect.cpp
-         0x2F0D14: "cube_render_hook", 0x2F3B34: "cube_render2_hook", 0x2F0390: "cube_wait_hook",   # hle_cubemap.cpp
+         0x2F0D14: "cube_render_hook", 0x2F3B34: "cube_render2_hook", 0x2F0390: "cube_wait_hook", 0x43B528: "cube_scene_hook",   # hle_cubemap.cpp
          0x2F141C: "skip_2f141c_hook", 0x2F1BEC: "skip_2f1bec_hook", 0x43F620: "skip_43f620_hook",   # hle_skipfn.cpp
          0x43FFA0: "skip_43ffa0_hook", 0x30388C: "skip_30388c_hook",
-         0x447704: "motion_blur_get_hook", 0x2F2CEC: "effect_take_hook",   # hle_gfxopts.cpp
+         0x447704: "motion_blur_get_hook", 0x452E08: "post_effects_hook", 0x2F2CEC: "effect_take_hook",   # hle_gfxopts.cpp
          0x3065F0: "car_lod_hook", 0x312900: "car_lod_hook",
          0x2F22D4: "environment_env_hook", 0x2F5950: "environment_sky_hook",   # hle_environment.cpp
          0x48F88: "boot_language_hook", 0x1FE0EC: "boot_init_hook",   # hle_boot.cpp

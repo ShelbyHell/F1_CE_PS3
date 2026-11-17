@@ -241,7 +241,7 @@ bool key_pressed(ImGuiKey a, ImGuiKey b, ImGuiKey c) {
 }  // namespace
 
 RowOut row_widget(const char* id, const std::string& label, const std::string& value, int index, bool arrows,
-                  bool experimental, const char* help, bool* focused_out) {
+                  bool experimental, const char* help, bool* focused_out, bool disabled) {
     RowOut out;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const ImVec2 p = ImGui::GetCursorScreenPos();
@@ -272,6 +272,7 @@ RowOut row_widget(const char* id, const std::string& label, const std::string& v
         if (key_pressed(ImGuiKey_LeftArrow, ImGuiKey_GamepadDpadLeft, ImGuiKey_GamepadLStickLeft)) out.delta = -1;
         if (key_pressed(ImGuiKey_RightArrow, ImGuiKey_GamepadDpadRight, ImGuiKey_GamepadLStickRight)) out.delta = 1;
     }
+    if (disabled) out.delta = 0, out.activated = false;
     // background: a parallelogram, carbon when focused
     const ImVec2 q[4] = {ImVec2(p.x + slant, p.y), ImVec2(p.x + w, p.y), ImVec2(p.x + w - slant, p.y + h), ImVec2(p.x, p.y + h)};
     if (focused) {
@@ -282,7 +283,7 @@ RowOut row_widget(const char* id, const std::string& label, const std::string& v
         dl->AddConvexPolyFilled(q, 4, hovered ? IM_COL32(226, 226, 226, 255)
                                       : index % 2 ? IM_COL32(247, 247, 247, 255) : IM_COL32(238, 238, 238, 255));
     }
-    const ImU32 fg = focused ? WHITE : INK;
+    const ImU32 fg = disabled ? GREY : focused ? WHITE : INK;
     text(dl, F.xbold, 17, ImVec2(p.x + 22 * S, p.y + 7 * S), fg, upper(label));
     if (experimental) {
         const std::string t = "EXPERIMENTAL";
@@ -293,8 +294,9 @@ RowOut row_widget(const char* id, const std::string& label, const std::string& v
     }
     if (arrows) {
         const float s = 7 * S, cy = p.y + h / 2;
-        dl->AddTriangleFilled(ImVec2(ax0 + 6 * S, cy), ImVec2(ax0 + 6 * S + s * 1.3f, cy - s), ImVec2(ax0 + 6 * S + s * 1.3f, cy + s), RED);
-        dl->AddTriangleFilled(ImVec2(ax1 - 6 * S, cy), ImVec2(ax1 - 6 * S - s * 1.3f, cy - s), ImVec2(ax1 - 6 * S - s * 1.3f, cy + s), RED);
+        const ImU32 ac = disabled ? GREY : RED;
+        dl->AddTriangleFilled(ImVec2(ax0 + 6 * S, cy), ImVec2(ax0 + 6 * S + s * 1.3f, cy - s), ImVec2(ax0 + 6 * S + s * 1.3f, cy + s), ac);
+        dl->AddTriangleFilled(ImVec2(ax1 - 6 * S, cy), ImVec2(ax1 - 6 * S - s * 1.3f, cy - s), ImVec2(ax1 - 6 * S - s * 1.3f, cy + s), ac);
     }
     const float vx0 = ax0 + 30 * S, vx1 = ax1 - 30 * S, tw = text_w(F.semi, 18, value);
     dl->PushClipRect(ImVec2(vx0, p.y), ImVec2(vx1, p.y + h), true);
@@ -395,7 +397,7 @@ int option_rows(int page, int first) {
         }
         ImGui::PushID(&o);
         const RowOut r = row_widget("row", o.label, o.value_label(), index++, o.kind != opts::TEXT, o.experimental,
-                                    o.help, nullptr);
+                                    o.help, nullptr, opts::disabled(o));
         if (r.delta && o.kind == opts::CHOICE) {
             o.sel = (o.sel + r.delta + (int)o.choices.size()) % (int)o.choices.size();
             opts::changed(o, g_ini);

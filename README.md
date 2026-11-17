@@ -312,7 +312,7 @@ are kept on a Deck too.
 | `F1CE_NO_PRECOMPILE=1` | skips the start-up shader phase (the program database is still recorded) |
 | `F1CE_NO_LINEGEN=1` | SPU PUTLLC compares the line data only (no write generation: the old behaviour) |
 | `F1CE_SCALE=1..4`, `<w>x<h>`, `480p`, `576p` | internal resolution (x 1280x720; 1.5 = 1920x1080, 3 = 3840x2160): fractions allowed, supersampled to the window. `<w>x<h>` (640x360 to 5120x2880), at another aspect ratio: the 3D scene takes that ratio and a wider field of view, its interface stays 16:9 in the middle, menus are 16:9 between black bars (`runtime/hle_aspect.cpp`). `480p`, `576p` (`:4x3` for 4:3): the PS3's own video modes, with the game's layouts for them |
-| `F1CE_MSAA=2/4/8` | samples of the targets the game antialiases (default 4, as on the RSX) |
+| `F1CE_MSAA=1/2/4/8` | samples of the targets the game antialiases (default 4, as on the RSX; 1 = off, launcher "Off") |
 | `F1CE_FXAA=1` | FXAA on the final image |
 | `F1CE_GPU=<vvvv:dddd>` | the GPU, by PCI vendor:device ids (hex, e.g. `10de:28e1`; Vulkan logs every GPU as `rsx: GPU ...`): Vulkan picks it, else a discrete GPU. OpenGL cannot pick one: the launcher's GPU choice sets Windows' graphics preference of `f1ce.exe` (`GpuPreference` under `HKCU\Software\Microsoft\DirectX\UserGpuPreferences`, the Settings > Display > Graphics entry; Automatic = high performance unless the player set one there), which names only the power-saving or the high-performance GPU; a mismatch is logged |
 | `F1CE_VSYNC=1/0/-1` | wait for the display's vblank (default) / off / adaptive: late frames tear instead of waiting |
@@ -321,11 +321,14 @@ are kept on a Deck too.
 | `F1CE_CUBE_FACES=1..6` | reflection cube map faces rendered per frame, in turn (default 6, as on the RSX; saves renderer time only, not the SPU jobs) |
 | `F1CE_CUBE_HZ=<n>` | reflection cube map updates per second at most (default 30 with `F1CE_60FPS`, as the original game at 30 fps, else every frame; 0: every frame; `runtime/hle_cubemap.cpp`); `F1CE_CUBE_SKIP=1` never renders it (measurement only) |
 | `F1CE_SHADOW_RES=<k>` | shadow maps at k times their original 1024x2048 (0.5 = lighter on the GPU, 2 = sharper); default: they follow `F1CE_SCALE` like every render target |
-| `F1CE_CUBE_RES=<k>` | reflection cube map faces at k times their original 256x256 (launcher "Reflection resolution"; default: they follow `F1CE_SCALE`) |
-| `F1CE_CUBE_STATIC=1` | static reflections: the cube map is rendered during the first 2 s of a scene, then kept until the next one (`runtime/hle_cubemap.cpp`) |
+| `F1CE_CUBE_RES=<k>` | reflection cube map faces at k times their original 256x256, 0.25-4 (launcher "Reflection resolution"; default: they follow `F1CE_SCALE`) |
+| `F1CE_CUBE_DIST=<m>` | reflection distance: the cube faces' far plane at most m metres (original 1000) |
+| `F1CE_REFLECTIONS=0` | reflections off: the faces are drawn during a scene's first 2 s with a 0.2 m far plane (clear colour and sky only), then kept: a plain sheen on the cars, no pass cost after that (`runtime/hle_cubemap.cpp`) |
+| `F1CE_REFLECTIONS=static` (or `F1CE_CUBE_STATIC=1`) | static reflections: the cube map is rendered during the first 2 s of a scene, then kept until the next one (`runtime/hle_cubemap.cpp`) |
 | `F1CE_TEX_RES=1/2` | texture resolution: the 1 or 2 largest mip levels of mipmapped textures are left out (half / quarter size; textures without mips, linear, main-memory and texel-addressed ones keep their size, short side at least 32 texels; `tex_levels_dropped` in `runtime/rsx_common.cpp`) |
 | `F1CE_CAR_LOD=<k>` | car detail distance: the game's car level-of-detail distances (15, 25, 50 m) times k (`runtime/hle_gfxopts.cpp`) |
 | `F1CE_MOTION_BLUR=0`, `F1CE_HEAT_HAZE=0` | no motion blur (the game's own Motion Blur.Enable read as off) / no heat haze behind the cars (the EngineHeat particle effect is never spawned); `runtime/hle_gfxopts.cpp` |
+| `F1CE_DOF=0`, `F1CE_BLOOM=0`, `F1CE_LIGHT_RAYS=0`, `F1CE_POSTFX=0` | the game's own Post Effects switches cleared every frame at the post-effects render (Depth Of Field / Bloom / Crob Rays .Enable); `F1CE_POSTFX=0` = all three plus motion blur and heat haze; `runtime/hle_gfxopts.cpp` |
 | `F1CE_ZPASS_LOG=1` | logs a burst of 200 occlusion reports (offset, count) every 10 s |
 | `F1CE_SKIP_FN=<hex>,..` | measurement only: these render functions return at once (2f141c static shadows, 2f1bec blurred shadows, 43f620 shadow map, 43ffa0 shadow to alpha, 30388c cars); all of them log their calls per second (`skipfn:`, `runtime/hle_skipfn.cpp`) |
 | `F1CE_SPURS_SPUS=<n>` | SPU worker threads (default 5; 6 works, 7 and 8 hang at boot; 3 halves the grid fps) |

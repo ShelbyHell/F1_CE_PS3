@@ -73,6 +73,12 @@ Option text(Page p, const char* key, const char* help) {
     return o;
 }
 Option header(Page p, const char* title) { return Option{p, HEADER, title, ""}; }
+// greyed out while the option key has the value v (nullptr: unset, a toggle that is off)
+Option greyed(Option o, const char* key, const char* v) {
+    o.off_key = key;
+    o.off_value = v;
+    return o;
+}
 
 std::vector<Option> make_options() {
     std::vector<Option> v;
@@ -130,11 +136,30 @@ std::vector<Option> make_options() {
                         {"1920x1080 (16:9)", "1.5"}, {"2560x1080 (21:9)", "2560x1080"}, {"2560x1440 (16:9)", "2"},
                         {"3440x1440 (21:9)", "3440x1440"}, {"3840x2160 (16:9)", "3"}, {"5120x2880 (16:9)", "4"}},
                        5, "The resolution the game renders at. 1280x720 is the original."));
-    v.push_back(choice(VIDEO, "Window size", "F1CE_WINDOW",
+    v.push_back(header(VIDEO, "Detail"));
+    v.push_back(choice(VIDEO, "Shadow maps", "F1CE_SHADOW_RES",
+                       {{"512x1024 (low)", "0.5"}, {"1024x2048 (original)", "1"}, {"Internal resolution", nullptr},
+                        {"2048x4096 (high)", "2"}},
+                       2, "Shadow map resolution: sharper car and track shadows, costs GPU time. 1024x2048 is the "
+                          "original; Internal resolution scales it with the resolution above."));
+    v.push_back(choice(VIDEO, "Textures", "F1CE_TEX_RES",
+                       {{"High (original)", nullptr}, {"Medium (half size)", "1"}, {"Low (quarter size)", "2"}}, 0,
+                       "Smaller textures save video memory on small GPUs."));
+    v.push_back(choice(VIDEO, "Car detail distance", "F1CE_CAR_LOD",
+                       {{"Near (x0.5, lighter)", "0.5"}, {"Original (15/25/50 m)", nullptr}, {"Far (x2)", "2"},
+                        {"Very far (x4)", "4"}},
+                       1, "How far away the cars switch to their simpler models (15, 25 and 50 m in the original)."));
+    v.push_back(header(VIDEO, "Display"));
+    v.push_back(toggle(VIDEO, "Full screen", "F1CE_FULLSCREEN", "Start in full screen. F11 toggles it in the game."));
+    v.push_back(greyed(choice(VIDEO, "Window size", "F1CE_WINDOW",
                        {{"1280x720", nullptr}, {"1600x900", "1600x900"}, {"1920x1080", "1920x1080"},
                         {"2560x1080 (21:9)", "2560x1080"}, {"2560x1440", "2560x1440"},
                         {"3440x1440 (21:9)", "3440x1440"}, {"3840x2160", "3840x2160"}},
-                       0, "The window's size when not in full screen."));
+                       0, "The window's size when not in full screen."), "F1CE_FULLSCREEN", "1"));
+    v.push_back(toggle(VIDEO, "Stretch to fill", "F1CE_STRETCH",
+                       "Stretch the picture to fill the window or the screen instead of keeping its aspect ratio "
+                       "(black bars)."));
+    v.push_back(header(VIDEO, "Frame rate"));
     v.push_back(choice(VIDEO, "Vertical sync", "F1CE_VSYNC", {{"On", nullptr}, {"Off", "0"}, {"Adaptive", "-1"}}, 0,
                        "On, Off or Adaptive (no wait when a frame is late)."));
     {
@@ -144,41 +169,46 @@ std::vector<Option> make_options() {
         o.experimental = true;
         v.push_back(o);
     }
-    v.push_back(choice(VIDEO, "60 fps mode cap", "F1CE_FPS_CAP", {{"None", nullptr}, {"30 fps", "30"}, {"45 fps", "45"}},
-                       0, "With Up to 60 fps: a steady 30 or 45 fps on machines that cannot hold 60 (Steam Deck), "
-                          "with that mode's frame pacing."));
-    v.push_back(choice(VIDEO, "Anti-aliasing (MSAA)", "F1CE_MSAA", {{"2x", "2"}, {"4x (original)", nullptr}, {"8x", "8"}},
-                       1, "Smooths the edges of the 3D scene. 4x is the original."));
-    v.push_back(choice(VIDEO, "Shadow maps", "F1CE_SHADOW_RES",
-                       {{"512x1024 (low)", "0.5"}, {"1024x2048 (original)", "1"}, {"Internal resolution", nullptr},
-                        {"2048x4096 (high)", "2"}},
-                       2, "Shadow map resolution: sharper car and track shadows, costs GPU time. 1024x2048 is the "
-                          "original; Internal resolution scales it with the resolution above."));
-    v.push_back(choice(VIDEO, "Reflection updates", "F1CE_CUBE_HZ",
+    v.push_back(greyed(choice(VIDEO, "60 fps mode cap", "F1CE_FPS_CAP",
+                              {{"None", nullptr}, {"30 fps", "30"}, {"45 fps", "45"}}, 0,
+                              "With Up to 60 fps: a steady 30 or 45 fps on machines that cannot hold 60 (Steam Deck), "
+                              "with that mode's frame pacing."),
+                       "F1CE_60FPS", nullptr));
+    v.push_back(header(VIDEO, "Anti-aliasing"));
+    v.push_back(choice(VIDEO, "MSAA", "F1CE_MSAA",
+                       {{"Off", "1"}, {"2x", "2"}, {"4x (original)", nullptr}, {"8x", "8"}}, 2,
+                       "Smooths the edges of the 3D scene. 4x is the original; Off is the lightest on the GPU."));
+    v.push_back(toggle(VIDEO, "FXAA", "F1CE_FXAA", "FXAA on the final image (softens what MSAA leaves)."));
+    v.push_back(header(VIDEO, "Post-processing"));
+    v.push_back(choice(VIDEO, "Post-processing", "F1CE_POSTFX", {{"On (original)", nullptr}, {"Off", "0"}}, 0,
+                       "Off: no motion blur, bloom, light rays, depth of field or heat haze, whatever the options "
+                       "below say."));
+    v.push_back(greyed(choice(VIDEO, "Motion blur", "F1CE_MOTION_BLUR", {{"On (original)", nullptr}, {"Off", "0"}}, 0,
+                       "The game's motion blur."), "F1CE_POSTFX", "0"));
+    v.push_back(greyed(choice(VIDEO, "Bloom", "F1CE_BLOOM", {{"On (original)", nullptr}, {"Off", "0"}}, 0,
+                       "The glow around bright parts of the picture."), "F1CE_POSTFX", "0"));
+    v.push_back(greyed(choice(VIDEO, "Light rays", "F1CE_LIGHT_RAYS", {{"On (original)", nullptr}, {"Off", "0"}}, 0,
+                       "The rays of light from the sun."), "F1CE_POSTFX", "0"));
+    v.push_back(greyed(choice(VIDEO, "Depth of field", "F1CE_DOF", {{"On (original)", nullptr}, {"Off", "0"}}, 0,
+                       "The blur of what is out of focus (replays, garage and menu scenes)."), "F1CE_POSTFX", "0"));
+    v.push_back(greyed(choice(VIDEO, "Heat haze", "F1CE_HEAT_HAZE", {{"On (original)", nullptr}, {"Off", "0"}}, 0,
+                       "The shimmer behind the cars' exhausts."), "F1CE_POSTFX", "0"));
+    v.push_back(header(VIDEO, "Reflections"));
+    v.push_back(choice(VIDEO, "Reflections", "F1CE_REFLECTIONS",
+                       {{"Live (original)", nullptr}, {"Static", "static"}, {"Off", "0"}}, 0,
+                       "Live: the cars reflect the scene as they move. Static: the scene at the start, kept until the "
+                       "next one. Off: a plain sheen. Static and Off save CPU time; the options below are for Live."));
+    v.push_back(choice(VIDEO, "Updates", "F1CE_CUBE_HZ",
                        {{"30 per second (original)", nullptr}, {"Every frame", "0"}, {"20 per second", "20"},
                         {"15 per second", "15"}, {"10 per second", "10"}},
                        0, "How often the cars' reflections are drawn again. Fewer updates save CPU time."));
-    v.push_back(choice(VIDEO, "Reflection resolution", "F1CE_CUBE_RES",
-                       {{"128x128 (low)", "0.5"}, {"256x256 (original)", "1"}, {"Internal resolution", nullptr},
-                        {"512x512 (high)", "2"}},
-                       2, "The reflection map's faces. 256x256 is the original."));
-    v.push_back(choice(VIDEO, "Textures", "F1CE_TEX_RES",
-                       {{"High (original)", nullptr}, {"Medium (half size)", "1"}, {"Low (quarter size)", "2"}}, 0,
-                       "Smaller textures save video memory on small GPUs."));
-    v.push_back(choice(VIDEO, "Car detail distance", "F1CE_CAR_LOD",
-                       {{"Near (x0.5, lighter)", "0.5"}, {"Original (15/25/50 m)", nullptr}, {"Far (x2)", "2"},
-                        {"Very far (x4)", "4"}},
-                       1, "How far away the cars switch to their simpler models (15, 25 and 50 m in the original)."));
-    v.push_back(choice(VIDEO, "Motion blur", "F1CE_MOTION_BLUR", {{"On (original)", nullptr}, {"Off", "0"}}, 0,
-                       "The game's motion blur."));
-    v.push_back(choice(VIDEO, "Heat haze", "F1CE_HEAT_HAZE", {{"On (original)", nullptr}, {"Off", "0"}}, 0,
-                       "The shimmer behind the cars' exhausts."));
-    v.push_back(toggle(VIDEO, "FXAA", "F1CE_FXAA", "FXAA on the final image (softens what MSAA leaves)."));
-    v.push_back(toggle(VIDEO, "Full screen", "F1CE_FULLSCREEN", "Start in full screen. F11 toggles it in the game."));
-    v.push_back(toggle(VIDEO, "Stretch to window", "F1CE_STRETCH",
-                       "Stretch the picture to the window instead of keeping its aspect ratio."));
-    v.push_back(toggle(VIDEO, "Static reflections", "F1CE_CUBE_STATIC",
-                       "Reflections drawn once when a race scene starts: saves CPU time."));
+    v.push_back(choice(VIDEO, "Resolution", "F1CE_CUBE_RES",
+                       {{"64x64 (very low)", "0.25"}, {"128x128 (low)", "0.5"}, {"256x256 (original)", "1"},
+                        {"Internal resolution", nullptr}, {"512x512 (high)", "2"}},
+                       3, "The reflection map's faces. 256x256 is the original."));
+    v.push_back(choice(VIDEO, "Distance", "F1CE_CUBE_DIST",
+                       {{"Original", nullptr}, {"200 m", "200"}, {"100 m", "100"}, {"50 m", "50"}, {"25 m", "25"}}, 0,
+                       "How far the cars' reflections show the scenery. Shorter saves some CPU time."));
 
     // ---------------------------------------------------------------- Quick Race ("Game menu": unset)
     const char* qr = "Used by the next Quick Race in place of the game menu's choice (the menu still shows its own).";
@@ -500,6 +530,12 @@ std::string Option::value_label() const {
 }
 
 std::vector<Option>& all() { return g_options; }
+bool disabled(const Option& o) {
+    if (!o.off_key) return false;
+    const Option* k = find(o.off_key);
+    if (!k) return false;
+    return same(k->kind == TOGGLE ? (k->sel ? k->on : nullptr) : value(*k), o.off_value);
+}
 Option* find(const char* key) {
     for (Option& o : g_options)
         if (!strcmp(o.key, key)) return &o;
@@ -548,6 +584,9 @@ void load(const Ini& ini) {
             o.text = ini.get("developer", o.key, "");
         }
     }
+    // the Static reflections check box before the Reflections choice (2026-11-17)
+    if (!ini.get("options", "F1CE_REFLECTIONS") && ini.get_int("options", "F1CE_CUBE_STATIC", 0))
+        select_value(*find("F1CE_REFLECTIONS"), "static");
     // a named preset whose options were changed in the ini (or an ini from before presets) shows what matches
     Option& preset = *find("preset");
     if (preset.sel != PRESET_CUSTOM && matching_preset() != preset.sel) preset.sel = matching_preset();
@@ -566,6 +605,7 @@ void save(Ini& ini) {
             else ini.set("developer", o.key, o.text);
         }
     }
+    ini.erase("options", "F1CE_CUBE_STATIC");   // (now the Reflections choice)
     if (find("preset")->sel == PRESET_CUSTOM) save_custom(ini);
 }
 

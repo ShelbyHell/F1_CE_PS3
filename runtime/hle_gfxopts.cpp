@@ -12,6 +12,12 @@
 //    at TOC 0x70E4A8), then one more level past each distance of the table at 0x1000E664 (25, 50 m), up to the car's
 //    level count (car +12960). Only these two functions read either constant. F1CE_CAR_LOD=<k> multiplies the three
 //    distances by k (2 = full detail up to 30 m), patched on the first call of either function.
+//  - Post effects: the Post Effects settings (DefaultPostEffects.txt / a track's PostEffects.txt, parsed by 0x4583A0)
+//    keep their switches as bytes: +0x418 Motion Blur.Enable, +0x419 Depth Of Field.Enable, +0x41B Bloom.Enable, +0x41C
+//    Crob Rays.Enable (light rays), +0x41D Rain And Muck.Enable. The post-effects render 0x452E08 (r3: the settings'
+//    handle, first word = the settings) tests them directly and skips a pass whose switch is 0, so clearing them at its
+//    entry every frame (the game's setters may turn them on again with a scene or camera) takes the game's own off
+//    paths. F1CE_DOF=0, F1CE_BLOOM=0, F1CE_LIGHT_RAYS=0; F1CE_POSTFX=0 turns off all three, motion blur and heat haze.
 #include <bit>
 #include <cstdlib>
 
@@ -22,8 +28,12 @@ bool env_off(const char* name) {
     const char* e = getenv(name);
     return e && atoi(e) == 0;
 }
-const bool g_no_motion_blur = env_off("F1CE_MOTION_BLUR");
-const bool g_no_heat_haze = env_off("F1CE_HEAT_HAZE");
+const bool g_no_postfx = env_off("F1CE_POSTFX");
+const bool g_no_motion_blur = g_no_postfx || env_off("F1CE_MOTION_BLUR");
+const bool g_no_dof = g_no_postfx || env_off("F1CE_DOF");
+const bool g_no_bloom = g_no_postfx || env_off("F1CE_BLOOM");
+const bool g_no_light_rays = g_no_postfx || env_off("F1CE_LIGHT_RAYS");
+const bool g_no_heat_haze = g_no_postfx || env_off("F1CE_HEAT_HAZE");
 constexpr u32 ENGINE_HEAT = 2;
 constexpr u32 LOD0_DIST2 = 0x70E4A8, LOD_DISTS = 0x1000E664;   // 15 m squared; 25 m, 50 m
 
@@ -38,6 +48,22 @@ bool motion_blur_get_hook(PPUContext& c) {
     if (!logged) { logged = true; LOG_I("effects: motion blur off"); }
     c.r[3] = 0;
     return true;
+}
+// 0x452E08: post-effects render (main thread, once per frame), r3 = the settings' handle
+bool post_effects_hook(PPUContext& c) {
+    if (!g_no_dof && !g_no_bloom && !g_no_light_rays) return false;
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        LOG_I("effects: depth of field %s, bloom %s, light rays %s", g_no_dof ? "off" : "on", g_no_bloom ? "off" : "on",
+              g_no_light_rays ? "off" : "on");
+    }
+    const u32 settings = ld32((u32)c.r[3]);
+    if (!settings) return false;
+    if (g_no_dof) st8(settings + 0x419, 0);
+    if (g_no_bloom) st8(settings + 0x41B, 0);
+    if (g_no_light_rays) st8(settings + 0x41C, 0);
+    return false;
 }
 // 0x2F2CEC: take an instance of effect r4 from the manager r3's pool (0: none free)
 bool effect_take_hook(PPUContext& c) {

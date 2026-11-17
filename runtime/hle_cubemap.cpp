@@ -6,9 +6,17 @@
 // frame); at 30 per second reflections refresh every other frame at 60 fps and every frame below ~40 fps. The main
 // view's wait for the faces' job fences (0x2F0390) is skipped with the pass, since the fences would then be the
 // previous frame's. F1CE_CUBE_SKIP=1 (experiment) never renders it. Hooks in tools/recomp.py HOOKS.
-// F1CE_CUBE_STATIC=1 (static reflections): the faces are rendered during the first 2 s of a scene and then kept until
-// the next one (a scene starts when the pass was not called for over a second: loading, menus). 2 s and not a single
-// frame, since programs compiled in the background and streamed textures are missing from a scene's first frames.
+// F1CE_REFLECTIONS=static or F1CE_CUBE_STATIC=1 (static reflections): the faces are rendered during the first 2 s of a
+// scene and then kept until the next one (a scene starts when the pass was not called for over a second: loading,
+// menus). 2 s and not a single frame, since programs compiled in the background and streamed textures are missing from
+// a scene's first frames.
+// F1CE_REFLECTIONS=0 (reflections off): as static, but the faces' camera far plane (f2 of the scene render 0x43B528,
+// the main camera's 1000 m) becomes 0.2 m, just past its 0.1 m near plane, so the faces hold only the clear colour
+// and the sky: the cars get a plain sheen and the pass costs nothing after a scene's first 2 s. (Never rendering the
+// faces, F1CE_CUBE_SKIP, leaves old memory in them: noise on the car bodies.)
+// F1CE_CUBE_DIST=<m> (reflection distance): the faces' far plane at most m metres. Silverstone race, 30 m: ~115 of the
+// pass's ~550 draws per frame and ~0.2-0.3 cores less (the 1000.0 stored at r25+0x110 +36 before the call changed
+// nothing); most of the pass is what is near the car.
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
@@ -22,7 +30,11 @@ const u64 g_interval = [] {
     const int hz = e ? atoi(e) : getenv("F1CE_60FPS") ? 30 : 0;
     return hz > 0 ? (u64)(750000 / hz) : 0;
 }();
-const bool g_static = getenv("F1CE_CUBE_STATIC") && atoi(getenv("F1CE_CUBE_STATIC")) != 0;
+const char* const g_mode = getenv("F1CE_REFLECTIONS");   // unset: live, "static", "0": off
+const bool g_off = g_mode && !strcmp(g_mode, "0");
+const double g_dist = getenv("F1CE_CUBE_DIST") ? atof(getenv("F1CE_CUBE_DIST")) : 0;
+const bool g_static = g_off || (g_mode && !strcmp(g_mode, "static")) ||
+                      (getenv("F1CE_CUBE_STATIC") && atoi(getenv("F1CE_CUBE_STATIC")) != 0);
 u64 g_last_render = 0;
 u64 g_last_call = 0, g_scene_start = 0;
 bool g_skipped = false;   // the last pass was skipped: its fence wait goes too
@@ -65,4 +77,12 @@ bool cube_wait_hook(PPUContext&) {
     if (!g_skipped) return false;
     g_skipped = false;
     return true;
+}
+// 0x43B528 (scene render), called by the cube pass at 0x2F0FB0 for each face with the main camera's near and far planes
+// in f1/f2 (0.1 and 1000 m)
+bool cube_scene_hook(PPUContext& c) {
+    if ((u32)c.lr != 0x2F0FB4) return false;
+    if (g_off) c.f[2].d = 0.2;
+    else if (g_dist > 0 && c.f[2].d > g_dist) c.f[2].d = g_dist;
+    return false;
 }

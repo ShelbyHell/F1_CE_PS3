@@ -25,9 +25,10 @@ struct Choice { const wchar_t* label; const wchar_t* value; };   // value nullpt
 
 // sections: group boxes, stacked in the columns of their tab
 struct Section { const wchar_t* title; int page, col; };
-enum { PRESET, VIDEO, GAME, QR_RACE, QR_RULES, DEV_LOG, DEV_TIMING, DEV_SPU, DEV_VALUES, DEV_RENDER, DEV_VALUES2 };
+enum { PRESET, VIDEO, DETAIL, POST, REFLECT, GAME, DISPLAY, FRAMERATE, AA, QR_RACE, QR_RULES, DEV_LOG, DEV_TIMING, DEV_SPU, DEV_VALUES, DEV_RENDER, DEV_VALUES2 };
 const Section g_sections[] = {
-    {L"Graphics Preset", 0, 0}, {L"Video Settings", 0, 0}, {L"Game Settings", 0, 1},
+    {L"Graphics Preset", 0, 0}, {L"Video Settings", 0, 0}, {L"Detail", 0, 0}, {L"Post-processing", 0, 0}, {L"Reflections", 0, 0},
+    {L"Game Settings", 0, 1}, {L"Display", 0, 1}, {L"Frame rate", 0, 1}, {L"Anti-aliasing", 0, 1},
     {L"Race", 1, 0}, {L"Rules", 1, 1},
     {L"Logging and profiling", 3, 0}, {L"Timing and threads", 3, 0}, {L"SPU and job manager", 3, 1},
     {L"Values (empty: unset)", 3, 1}, {L"Renderer", 3, 2}, {L"Captures and tests", 3, 2},
@@ -42,7 +43,7 @@ struct Combo {
     int def;
     int section;
     const wchar_t* tip = nullptr;   // the label's and the box's tooltip
-    HWND h = nullptr;
+    HWND h = nullptr, label_h = nullptr;
 };
 struct Check {
     const wchar_t* label;
@@ -73,8 +74,8 @@ Combo g_combos[] = {
       {L"3440x1440 (21:9)", L"3440x1440"}, {L"3840x2160 (16:9)", L"3"}, {L"5120x2880 (16:9)", L"4"}}, 5, VIDEO},
     {L"Window size", L"F1CE_WINDOW",
      {{L"1280x720", nullptr}, {L"1600x900", L"1600x900"}, {L"1920x1080", L"1920x1080"}, {L"2560x1080 (21:9)", L"2560x1080"},
-      {L"2560x1440", L"2560x1440"}, {L"3440x1440 (21:9)", L"3440x1440"}, {L"3840x2160", L"3840x2160"}}, 0, VIDEO},
-    {L"Vertical sync", L"F1CE_VSYNC", {{L"On", nullptr}, {L"Off", L"0"}, {L"Adaptive", L"-1"}}, 0, VIDEO},
+      {L"2560x1440", L"2560x1440"}, {L"3440x1440 (21:9)", L"3440x1440"}, {L"3840x2160", L"3840x2160"}}, 0, DISPLAY},
+    {L"Vertical sync", L"F1CE_VSYNC", {{L"On", nullptr}, {L"Off", L"0"}, {L"Adaptive", L"-1"}}, 0, FRAMERATE},
     // launcher only (not passed to the game): sets the options of PRESET_ENVS (g_presets); "Custom" keeps the
     // player's own values, saved in the ini's [custom preset] section
     {L"Preset", L"preset",
@@ -82,31 +83,44 @@ Combo g_combos[] = {
       {L"Custom", L"custom"}}, 0, PRESET,
      L"Sets anti-aliasing, shadows, reflections, textures, car detail, motion blur and heat haze in Video Settings; "
      L"changing one of them there makes it Custom (kept for the next time Custom is picked)."},
-    {L"Anti-aliasing (MSAA)", L"F1CE_MSAA", {{L"2x", L"2"}, {L"4x (original)", nullptr}, {L"8x", L"8"}}, 1, VIDEO},
+    {L"MSAA", L"F1CE_MSAA", {{L"Off", L"1"}, {L"2x", L"2"}, {L"4x (original)", nullptr}, {L"8x", L"8"}}, 2, AA},
     {L"Shadow map resolution", L"F1CE_SHADOW_RES",
      {{L"512x1024 (low)", L"0.5"}, {L"1024x2048 (original)", L"1"}, {L"Internal resolution", nullptr},
-      {L"2048x4096 (high)", L"2"}}, 2, VIDEO},
+      {L"2048x4096 (high)", L"2"}}, 2, DETAIL},
+    // reflections (runtime/hle_cubemap.cpp): live as the game does, static (drawn when a scene starts, then kept) or
+    // off (a plain sheen); updates, resolution and distance are for live
+    {L"Reflections", L"F1CE_REFLECTIONS", {{L"Live (original)", nullptr}, {L"Static", L"static"}, {L"Off (plain sheen)", L"0"}},
+     0, REFLECT},
     // fewer reflection updates save CPU time (runtime/hle_cubemap.cpp)
-    {L"Reflection updates", L"F1CE_CUBE_HZ",
+    {L"Updates", L"F1CE_CUBE_HZ",
      {{L"30 per second (original)", nullptr}, {L"Every frame", L"0"}, {L"20 per second", L"20"}, {L"15 per second", L"15"},
-      {L"10 per second", L"10"}}, 0, VIDEO},
+      {L"10 per second", L"10"}}, 0, REFLECT},
     // the cube map faces (256x256 targets), like the shadow maps (runtime/hle_aspect.cpp)
-    {L"Reflection resolution", L"F1CE_CUBE_RES",
-     {{L"128x128 (low)", L"0.5"}, {L"256x256 (medium, original)", L"1"}, {L"Internal resolution", nullptr},
-      {L"512x512 (high)", L"2"}}, 2, VIDEO},
+    {L"Resolution", L"F1CE_CUBE_RES",
+     {{L"64x64 (very low)", L"0.25"}, {L"128x128 (low)", L"0.5"}, {L"256x256 (medium, original)", L"1"},
+      {L"Internal resolution", nullptr}, {L"512x512 (high)", L"2"}}, 3, REFLECT},
+    // the faces' far plane at most this far; Off: faces drawn once with a 0.2 m far plane (runtime/hle_cubemap.cpp)
+    {L"Distance", L"F1CE_CUBE_DIST",
+     {{L"Original", nullptr}, {L"200 m", L"200"}, {L"100 m", L"100"}, {L"50 m", L"50"}, {L"25 m", L"25"}}, 0, REFLECT},
     // mip levels left out of mipmapped textures (runtime/rsx_common.cpp tex_levels_dropped)
     {L"Texture resolution", L"F1CE_TEX_RES",
-     {{L"High (original)", nullptr}, {L"Medium (half size)", L"1"}, {L"Low (quarter size)", L"2"}}, 0, VIDEO},
+     {{L"High (original)", nullptr}, {L"Medium (half size)", L"1"}, {L"Low (quarter size)", L"2"}}, 0, DETAIL},
     // what the game draws (runtime/hle_gfxopts.cpp): the distances of the car models' detail levels (15, 25, 50 m)
     // and two effects it can do without
     {L"Car detail distance", L"F1CE_CAR_LOD",
      {{L"Near (x0.5, lighter)", L"0.5"}, {L"Original (15/25/50 m)", nullptr}, {L"Far (x2)", L"2"},
-      {L"Very far (x4)", L"4"}}, 1, VIDEO},
-    {L"Motion blur", L"F1CE_MOTION_BLUR", {{L"On (original)", nullptr}, {L"Off", L"0"}}, 0, VIDEO},
-    {L"Heat haze behind the cars", L"F1CE_HEAT_HAZE", {{L"On (original)", nullptr}, {L"Off", L"0"}}, 0, VIDEO},
+      {L"Very far (x4)", L"4"}}, 1, DETAIL},
+    // the game's own post-effect switches; Post-processing Off clears all of them, motion blur and heat haze (the
+    // others are greyed out then, update_enabled)
+    {L"Post-processing", L"F1CE_POSTFX", {{L"On (original)", nullptr}, {L"Off", L"0"}}, 0, POST},
+    {L"Motion blur", L"F1CE_MOTION_BLUR", {{L"On (original)", nullptr}, {L"Off", L"0"}}, 0, POST},
+    {L"Bloom", L"F1CE_BLOOM", {{L"On (original)", nullptr}, {L"Off", L"0"}}, 0, POST},
+    {L"Light rays", L"F1CE_LIGHT_RAYS", {{L"On (original)", nullptr}, {L"Off", L"0"}}, 0, POST},
+    {L"Depth of field", L"F1CE_DOF", {{L"On (original)", nullptr}, {L"Off", L"0"}}, 0, POST},
+    {L"Heat haze behind the cars", L"F1CE_HEAT_HAZE", {{L"On (original)", nullptr}, {L"Off", L"0"}}, 0, POST},
     // with "Up to 60 fps": a steady 30 on machines that cannot hold 60 (Steam Deck), with that mode's pacing
     // (runtime/hle_gcm.cpp pace_ticks)
-    {L"60 fps mode cap", L"F1CE_FPS_CAP", {{L"None", nullptr}, {L"30 fps", L"30"}, {L"45 fps", L"45"}}, 0, GAME},
+    {L"60 fps mode cap", L"F1CE_FPS_CAP", {{L"None", nullptr}, {L"30 fps", L"30"}, {L"45 fps", L"45"}}, 0, FRAMERATE},
     // gamepad motors: update 02.00's DualShock 3 vibration ported to this version (runtime/hle_rumble.cpp)
     {L"Controller vibration", L"F1CE_RUMBLE",
      {{L"Off", L"0"}, {L"Light", L"50"}, {L"Normal", nullptr}, {L"Strong", L"150"}}, 2, GAME},
@@ -188,11 +202,10 @@ constexpr int PRESET_CUSTOM = sizeof(g_presets) / sizeof(g_presets[0]);
 const wchar_t* const CUSTOM_SECTION = L"custom preset";
 
 Check g_checks[] = {
-    {L"FXAA on the final image", L"F1CE_FXAA", VIDEO},
-    {L"Start in full screen (F11 toggles it)", L"F1CE_FULLSCREEN", VIDEO},
-    {L"Stretch to the window instead of keeping the aspect ratio", L"F1CE_STRETCH", VIDEO},
-    {L"Static reflections (drawn once when a race scene starts, saves CPU time)", L"F1CE_CUBE_STATIC", VIDEO},
-    {L"Up to 60 fps (game speed unchanged)", L"F1CE_60FPS", GAME,
+    {L"FXAA on the final image", L"F1CE_FXAA", AA},
+    {L"Start in full screen (F11 toggles it)", L"F1CE_FULLSCREEN", DISPLAY},
+    {L"Stretch to fill (window or screen) instead of keeping the aspect ratio", L"F1CE_STRETCH", DISPLAY},
+    {L"Up to 60 fps (game speed unchanged)", L"F1CE_60FPS", FRAMERATE,
      L"Experimental:|flashing shadows, odd pit stop animations, broken replay and ghost car behaviour. "
      L"Turn it off if anything goes wrong."},
     {L"Skip the language menu and the intro (start at Press Start)", L"F1CE_SKIP_INTRO", GAME},
@@ -324,6 +337,31 @@ Combo* find_combo(const wchar_t* env) {
 }
 int selection(const Combo& c) { return (int)SendMessageW(c.h, CB_GETCURSEL, 0, 0); }
 const wchar_t* selected_value(const Combo& c) { return c.choices[selection(c)].value; }
+Check* find_check(const wchar_t* env) {
+    for (Check& c : g_checks)
+        if (!wcscmp(c.env, env)) return &c;
+    return nullptr;
+}
+// options that do nothing while another is set are greyed out (still saved and passed: the window size matters again
+// after F11): the post effects while Post-processing is Off, the window size in full screen, the 60 fps mode cap
+// without Up to 60 fps
+void update_enabled() {
+    const wchar_t* postfx = selected_value(*find_combo(L"F1CE_POSTFX"));
+    const bool post_on = !postfx || wcscmp(postfx, L"0");
+    for (const wchar_t* e : {L"F1CE_MOTION_BLUR", L"F1CE_BLOOM", L"F1CE_LIGHT_RAYS", L"F1CE_DOF", L"F1CE_HEAT_HAZE"}) {
+        const Combo& c = *find_combo(e);
+        EnableWindow(c.h, post_on);
+        EnableWindow(c.label_h, post_on);
+    }
+    const Combo& window = *find_combo(L"F1CE_WINDOW");
+    const bool windowed = !checked(*find_check(L"F1CE_FULLSCREEN"));
+    EnableWindow(window.h, windowed);
+    EnableWindow(window.label_h, windowed);
+    const Combo& cap = *find_combo(L"F1CE_FPS_CAP");
+    const bool fps60 = checked(*find_check(L"F1CE_60FPS"));
+    EnableWindow(cap.h, fps60);
+    EnableWindow(cap.label_h, fps60);
+}
 
 // one choice per GPU (DXGI adapter, software ones left out); the value is its PCI ids "vvvv:dddd" (hex), which the
 // Vulkan renderer looks for (runtime/rsx_vk.cpp). OpenGL takes the GPU from Windows' graphics preference of f1ce.exe
@@ -452,6 +490,10 @@ void load_settings() {
             if (c.choices[i].value && !wcscmp(c.choices[i].value, b)) sel = (int)i;
         SendMessageW(c.h, CB_SETCURSEL, sel, 0);
     }
+    // the Static reflections check box before the Reflections combo (2026-11-17)
+    GetPrivateProfileStringW(L"options", L"F1CE_REFLECTIONS", L"", b, MAX_PATH * 2, g_ini.c_str());
+    if (!b[0] && GetPrivateProfileIntW(L"options", L"F1CE_CUBE_STATIC", 0, g_ini.c_str()))
+        SendMessageW(find_combo(L"F1CE_REFLECTIONS")->h, CB_SETCURSEL, 1, 0);
     {   // a named preset whose options were changed in the ini (or an ini from before presets) shows what matches
         Combo& preset = *find_combo(PRESET_KEY);
         if (selection(preset) != PRESET_CUSTOM && matching_preset() != selection(preset))
@@ -475,6 +517,7 @@ void save_settings() {
         const wchar_t* v = c.choices[SendMessageW(c.h, CB_GETCURSEL, 0, 0)].value;   // (nullptr deletes the key: default)
         WritePrivateProfileStringW(L"options", c.env, v, g_ini.c_str());
     }
+    WritePrivateProfileStringW(L"options", L"F1CE_CUBE_STATIC", nullptr, g_ini.c_str());   // (now the Reflections combo)
     if (selection(*find_combo(PRESET_KEY)) == PRESET_CUSTOM) save_custom();
     for (Check& c : g_checks) WritePrivateProfileStringW(L"options", c.env, checked(c) ? L"1" : L"0", g_ini.c_str());
     for (Field& f : g_fields) {
@@ -660,7 +703,7 @@ int build_section(int s, int x, int y, int w) {
         if (c.section == s) label_w = std::max(label_w, std::min(text_w(c.label) + 10, iw / 2));
     for (Combo& c : g_combos) {
         if (c.section != s) continue;
-        HWND l = add(L"STATIC", c.label, SS_NOTIFY | SS_ENDELLIPSIS, ix, y + 3, label_w, 18, 0, page);
+        HWND l = c.label_h = add(L"STATIC", c.label, SS_NOTIFY | SS_ENDELLIPSIS, ix, y + 3, label_w, 18, 0, page);
         c.h = add(L"COMBOBOX", L"", WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST, ix + label_w, y, iw - label_w, 240, 0, page);
         int list_w = 0;
         for (const Choice& ch : c.choices) {
@@ -854,6 +897,9 @@ LRESULT CALLBACK wnd_proc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                     SendMessageW(preset.h, CB_SETCURSEL, PRESET_CUSTOM, 0);
                     save_custom();
                 }
+                update_enabled();
+            } else if (HIWORD(wp) == BN_CLICKED) {
+                update_enabled();
             }
             return 0;
         case WM_CTLCOLORSTATIC: {   // labels and check boxes on the tab's body: its background under the text
@@ -1030,6 +1076,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
     }
     layout();
     load_settings();
+    update_enabled();
     wheeltab::start();   // (finding and opening the wheel takes about a second: in the background from now on)
     ShowWindow(g_main, GetPrivateProfileIntW(L"game", L"window_maximized", 0, g_ini.c_str()) ? SW_SHOWMAXIMIZED : show);
 

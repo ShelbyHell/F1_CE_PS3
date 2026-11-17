@@ -422,7 +422,8 @@ Surface* bind_target() {
         s->attached_depth = depth;
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) LOG_W("GL: incomplete FBO %08x", s->offset);
     }
-    static const bool no_msaa = getenv("F1CE_NO_MSAA") != nullptr;   // debug
+    // F1CE_MSAA=1: antialiasing off (the launcher's "Off"); F1CE_NO_MSAA: the same, debug name
+    static const bool no_msaa = getenv("F1CE_NO_MSAA") || (getenv("F1CE_MSAA") && atoi(getenv("F1CE_MSAA")) == 1);
     s->ms_active = !main && ((fmt >> 12) & 0xF) && !no_msaa;
     GLuint fb = s->ms_active ? ensure_ms(s) : s->fbo;
     if (!g_tgt_valid || bound_fbo != fb) glBindFramebuffer(GL_FRAMEBUFFER, fb);

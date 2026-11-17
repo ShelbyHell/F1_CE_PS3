@@ -18,10 +18,11 @@ void text(ImDrawList* dl, ImFont* f, float size, ImVec2 p, ImU32 col, const std:
 float text_w(ImFont* f, float size, const std::string& s);
 
 // one setting row: label on the left, value between ◀ ▶ (arrows) on the right. index: among the section's focusable
-// rows (the focus is restored by it). Returns what the player did.
+// rows (the focus is restored by it). Returns what the player did. disabled: drawn grey, still focusable (its help
+// shows), but changes nothing.
 struct RowOut { bool activated = false; int delta = 0; bool focused = false; };
 RowOut row_widget(const char* id, const std::string& label, const std::string& value, int index, bool arrows,
-                  bool experimental, const char* help, bool* focused_out);
+                  bool experimental, const char* help, bool* focused_out, bool disabled = false);
 void header_widget(const std::string& title);
 // a list of choices under the last row (✕ / click picks one, ○ / Esc closes), a text field over its value box
 void open_list(std::vector<std::string> items, int sel, std::function<void(int)> pick);

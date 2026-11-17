@@ -23,6 +23,10 @@ struct Option {
     const char* help = "";
     const char* on = "1";       // TOGGLE: the variable's value when on
     bool experimental = false;
+    // greyed out while the option off_key has the value off_value (still passed: the game ignores it then, or it
+    // matters again later, as the window size after F11)
+    const char* off_key = nullptr;
+    const char* off_value = nullptr;
     // state
     int sel = 0;                // CHOICE: the choice; TOGGLE: 0 / 1
     std::string text;           // TEXT
@@ -31,6 +35,7 @@ struct Option {
 
 std::vector<Option>& all();
 Option* find(const char* key);
+bool disabled(const Option& o);
 
 // at start: the launcher's folder (the game's executable is there), the season packs and GPUs found
 void init(const std::string& exe_dir);
