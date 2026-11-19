@@ -24,9 +24,11 @@
 
 #include "host.h"
 #include "kernel.h"
+#include "slick_tuning.h"
 
 namespace {
 std::atomic<u64> g_last_out{0};   // time of the last motor update from the controller update
+std::atomic<u64> g_slick_speed{0}; // high word: host milliseconds, low word: km/h float
 
 float strength() {
     static const float s = getenv("F1CE_RUMBLE") ? std::clamp(atoi(getenv("F1CE_RUMBLE")), 0, 200) / 100.0f : 1.0f;
@@ -100,6 +102,12 @@ void rumble(u32 ctl, bool active) {
 }
 }  // namespace
 
+float slick::player_speed_kmh() {
+    const u64 sample = g_slick_speed.load(std::memory_order_relaxed);
+    const u32 age = (u32)(time_usec() / 1000) - (u32)(sample >> 32);
+    return sample && age <= 150 ? std::bit_cast<float>((u32)sample) : -1.0f;
+}
+
 void sub_003574C0(PPUContext& __restrict c);
 void ai_drive_update(PPUContext& c, u32 ctl, bool driving);   // hle_aidrive.cpp
 
@@ -130,6 +138,15 @@ bool controller_update_hook(PPUContext& c) {
     inside = true;
     sub_003574C0(c);
     inside = false;
+    if (runs && driving && slick::handling_enabled()) {
+        const u32 player = ld32(ctl + 0x160);
+        const u32 car = player ? ld32(player + 0x24) : 0;
+        const float speed = car ? ldf(car + 0x3c0) * 3.6f : -1.0f;
+        if (std::isfinite(speed) && speed >= 0.0f) {
+            const u64 ms = (u32)(time_usec() / 1000);
+            g_slick_speed.store((ms << 32) | std::bit_cast<u32>(speed), std::memory_order_relaxed);
+        }
+    }
     if (runs) ai_drive_update(c, ctl, driving);
     if (wheel_log && runs) {   // the controller's action flags (+0x168) when they change
         static u32 last = 0;
