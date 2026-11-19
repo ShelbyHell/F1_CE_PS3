@@ -179,6 +179,12 @@ Combo g_combos[] = {
     {L"Crash damage", L"F1CE_QR_DAMAGE", {{L"Game menu", nullptr}, {L"Off", L"0"}, {L"On", L"1"}}, 0, QR_RULES},
     {L"Component failure", L"F1CE_QR_FAILURES", {{L"Game menu", nullptr}, {L"Off", L"0"}, {L"On", L"1"}}, 0, QR_RULES},
     {L"Penalties", L"F1CE_QR_PENALTIES", {{L"Game menu", nullptr}, {L"Off", L"0"}, {L"On", L"1"}}, 0, QR_RULES},
+    {L"Slick physics", L"F1CE_SLICK_TEST",
+     {{L"Stock", nullptr}, {L"Basic slicks", L"1"}, {L"2026", L"2026"}, {L"2026 - gamepad handling", L"handling"}}, 0, QR_RULES,
+     L"Experimental offline dry-tyre physics. Use Realistic tyre wear. Textures are a separate mod pack."},
+    {L"Slick compound", L"F1CE_SLICK_COMPOUND", {{L"Baseline", nullptr}, {L"Soft", L"soft"}, {L"Hard", L"hard"}}, 0, QR_RULES},
+    {L"Slick telemetry (CSV)", L"F1CE_SLICK_TELEMETRY", {{L"Off", nullptr}, {L"On", L"1"}}, 0, QR_RULES,
+     L"Write player inputs, speed, wheelspin and tyre wear to slick_telemetry.csv at 10 Hz, including in Stock."},
     // Developer Tools
     {L"F1CE_PIN", L"F1CE_PIN", {{L"Default", nullptr}, {L"0: no pinning", L"0"}, {L"1: main PPU too", L"1"}}, 0, DEV_TIMING},
     // the AI drives the player's car, as after a black flag (runtime/hle_aidrive.cpp): F8 toggles it in a race

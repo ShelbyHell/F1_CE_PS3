@@ -6,7 +6,7 @@ These experimental presets target dry tyres in single-player Quick Race. Select 
 
 ## Setup
 
-1. Build `build-win/f1ce.exe` with `-DF1CE_VULKAN=ON` (see [Build](../README.md#build)). The launch scripts use that build unless the corresponding local executable is present in `Slick-Test`: `f1ce-slick.exe`, `f1ce-slick-2026.exe`, or `f1ce-slick-handling.exe`.
+1. Build `build-win/f1ce.exe` with `-DF1CE_VULKAN=ON` (see [Build](../README.md#build)). The launch scripts prefer that build. If it is missing, they fall back to the corresponding local `f1ce-slick*.exe`, which may be an older snapshot without the latest options.
 2. Put your `PS3_GAME` folder in the repository root, or create `Slick-Test/local.cmd` with its actual path:
 
    ```bat
@@ -22,6 +22,8 @@ These experimental presets target dry tyres in single-player Quick Race. Select 
 The generator writes dry tread colour, normal, and specular maps to `MODS/SLICK_TEXTURES` under `Slick-Test`, preserving all nine mip levels. It leaves sidewalls and intermediate and wet tyres unchanged. Original and modified map previews go into `Texture-Preview`. The scripts run from `Slick-Test`, using a separate save and shader cache directory; they do not change the original game archives or launcher.
 
 ## Launch presets
+
+In either launcher, use **Quick Race → Slick physics**, **Slick compound**, and **Slick telemetry (CSV)**. For slick visuals, separately select `SLICK_TEXTURES` as the season pack after copying its generated folder into `MODS` next to the launcher. The scripts below are an alternative and already know where to find the generated pack.
 
 | Script | What it changes |
 | --- | --- |
@@ -45,6 +47,14 @@ Set `F1CE_SLICK_COMPOUND=soft` or `hard` before launch (or in `local.cmd`). Leav
 
 The grip curve uses each wheel's own wear value and saturates at `0.65` internal wear units. The factors are initial tuning targets, not measured stint lengths.
 
+### Telemetry
+
+Enable **Slick telemetry (CSV)** or set `F1CE_SLICK_TELEMETRY=1` before launching a script. The game writes `slick_telemetry.csv` in its working directory (`Slick-Test` for the scripts) at approximately 10 Hz while the player drives. Stock physics can log too. Each run with driving samples overwrites the previous CSV; rename it before comparing runs.
+
+The CSV includes speed in km/h, the normalized pad steering command sent to the game (not a measured road-wheel angle), in-game throttle, gear, wheel-contact mask, and each wheel's slip flag and internal wear. Wheel indices 0–1 are front; 2–3 are rear.
+
 ## Verification
 
 Dry Silverstone runs confirmed activation of the grip, wear, and drive changes in `f1ce_recomp.log` (look for `slick test:`). The texture run confirmed all three replacements in `offline.wad`, and the smooth tread was visible on track. Lap times, acceleration times, tyre life, and hands-on gamepad feel have not been measured.
+
+`tools/check_tuning.cpp` is a standalone C++20 check of the steering curve, boost ramp, and compound curves. Compile it without `NDEBUG` and run it to check the tuning math without starting the game.

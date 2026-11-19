@@ -4,6 +4,7 @@
 #include "lv2_fs.h"
 #include "overlay.h"
 #include "rsx.h"
+#include "slick_tuning.h"
 
 #include <algorithm>
 #include <array>
@@ -33,7 +34,10 @@ HLE_FUNC(cellPadGetData) {
     if (port != 0) { st32(p, 0); RET(CELL_OK); }
     host::PadState s = host::pad_state();
     if (overlay::input_captured()) s = {};   // a system dialog (overlay.h) has the pad
-    if (!g_online_image) quick_race_overrides(s.digital1, s.lx, s.ly);   // (EBOOT addresses)
+    if (!g_online_image) {
+        quick_race_overrides(s.digital1, s.lx, s.ly);   // (EBOOT addresses)
+        if (slick::telemetry_enabled()) slick::telemetry_pad_axis(s.lx);
+    }
     rumble_update();
     st32(p, 24);
     u16 b[24] = {};

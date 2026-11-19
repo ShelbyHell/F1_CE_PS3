@@ -5,7 +5,7 @@ if exist "%~dp0local.cmd" call "%~dp0local.cmd"
 set "TEST_EXE=f1ce-slick.exe"
 if /i "%~1"=="2026" set "TEST_EXE=f1ce-slick-2026.exe"
 if /i "%~1"=="handling" set "TEST_EXE=f1ce-slick-handling.exe"
-if not exist "%TEST_EXE%" set "TEST_EXE=..\build-win\f1ce.exe"
+if exist "..\build-win\f1ce.exe" set "TEST_EXE=..\build-win\f1ce.exe"
 if not exist "%TEST_EXE%" (
     echo Build f1ce.exe or copy it to this folder. See README.md.
     pause

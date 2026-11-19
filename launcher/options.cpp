@@ -261,6 +261,16 @@ std::vector<Option> make_options() {
                        {{"Game menu", nullptr}, {"Off", "0"}, {"On", "1"}}, 0, qr));
     v.push_back(choice(QUICK_RACE, "Penalties", "F1CE_QR_PENALTIES", {{"Game menu", nullptr}, {"Off", "0"}, {"On", "1"}},
                        0, qr));
+    v.push_back(header(QUICK_RACE, "Experimental slick tyres"));
+    v.push_back(choice(QUICK_RACE, "Slick physics", "F1CE_SLICK_TEST",
+                       {{"Stock", nullptr}, {"Basic slicks", "1"}, {"2026", "2026"}, {"2026 - gamepad handling", "handling"}},
+                       0, "Experimental offline physics for dry tyres. Use Realistic tyre wear. Textures are a separate mod pack."));
+    v.push_back(greyed(choice(QUICK_RACE, "Slick compound", "F1CE_SLICK_COMPOUND",
+                       {{"Baseline", nullptr}, {"Soft", "soft"}, {"Hard", "hard"}}, 0,
+                       "Soft has more fresh grip and wears faster. Hard has less fresh grip and lasts longer."),
+                       "F1CE_SLICK_TEST", nullptr));
+    v.push_back(toggle(QUICK_RACE, "Slick telemetry (CSV)", "F1CE_SLICK_TELEMETRY",
+                       "Records player inputs, speed, wheelspin and wear at 10 Hz in slick_telemetry.csv. Works in Stock too."));
 
     // ---------------------------------------------------------------- Multiplayer (runtime/hle_net.cpp)
     v.push_back(header(MULTIPLAYER, "Virtual LAN"));

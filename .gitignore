@@ -42,3 +42,4 @@ freeze_task*.bin
 /Slick-Test/shader_cache/
 /Slick-Test/MODS/
 /Slick-Test/Texture-Preview/
+slick_telemetry.csv

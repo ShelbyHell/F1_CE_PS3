@@ -61,4 +61,6 @@ inline float compound_grip(Compound compound, float wear) {
 
 // A negative value means the player controller is not currently updating.
 float player_speed_kmh();
+bool telemetry_enabled();
+void telemetry_pad_axis(unsigned lx);
 }

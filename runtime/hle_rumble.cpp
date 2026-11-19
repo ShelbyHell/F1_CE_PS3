@@ -19,6 +19,8 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <cstdio>
+#include <cstring>
 #include <cstdlib>
 #include <string>
 
@@ -29,12 +31,35 @@
 namespace {
 std::atomic<u64> g_last_out{0};   // time of the last motor update from the controller update
 std::atomic<u64> g_slick_speed{0}; // high word: host milliseconds, low word: km/h float
+std::atomic<unsigned> g_slick_pad{128};
 
 float strength() {
     static const float s = getenv("F1CE_RUMBLE") ? std::clamp(atoi(getenv("F1CE_RUMBLE")), 0, 200) / 100.0f : 1.0f;
     return s;
 }
 float ldf(u32 ea) { return std::bit_cast<float>(ld32(ea)); }
+
+void slick_telemetry(u32 car, float speed, u64 now) {
+    static u64 next = 0;
+    if (now < next) return;
+    next = now + 100000;
+    static FILE* csv = [] {
+        FILE* out = std::fopen("slick_telemetry.csv", "w");
+        if (!out) { LOG_W("slick telemetry: could not open slick_telemetry.csv"); return out; }
+        std::fputs("elapsed_s,car,speed_kmh,pad_steer,throttle,gear,contact_mask,slip_0,slip_1,slip_2,slip_3,wear_0,wear_1,wear_2,wear_3\n", out);
+        return out;
+    }();
+    if (!csv) return;
+    static const u64 start = now;
+    const int axis = (int)g_slick_pad.load(std::memory_order_relaxed) - 128;
+    const float steer = axis / (axis < 0 ? 128.0f : 127.0f);
+    const u32 slip = (ld32(car + 0x97c) >> 8) & 0xf;
+    std::fprintf(csv, "%.3f,%08x,%.3f,%.4f,%.4f,%d,%u,%u,%u,%u,%u,%.6f,%.6f,%.6f,%.6f\n",
+                 (now - start) / 1e6, car, speed, steer, ldf(car + 0x950), (int)(s8)ld8(car + 0x9b8),
+                 ld32(car + 0x980) & 0xf, slip & 1, (slip >> 1) & 1, (slip >> 2) & 1, (slip >> 3) & 1,
+                 ldf(car + 0x8b0), ldf(car + 0x8b4), ldf(car + 0x8b8), ldf(car + 0x8bc));
+    std::fflush(csv);
+}
 
 void motors(bool small, int large) {
     host::pad_rumble(std::min(large / 255.0f * strength(), 1.0f), small ? std::min(strength(), 1.0f) : 0.0f);
@@ -108,6 +133,16 @@ float slick::player_speed_kmh() {
     return sample && age <= 150 ? std::bit_cast<float>((u32)sample) : -1.0f;
 }
 
+bool slick::telemetry_enabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("F1CE_SLICK_TELEMETRY");
+        return value && std::strcmp(value, "1") == 0;
+    }();
+    return enabled;
+}
+
+void slick::telemetry_pad_axis(unsigned lx) { g_slick_pad.store(lx, std::memory_order_relaxed); }
+
 void sub_003574C0(PPUContext& __restrict c);
 void ai_drive_update(PPUContext& c, u32 ctl, bool driving);   // hle_aidrive.cpp
 
@@ -138,13 +173,17 @@ bool controller_update_hook(PPUContext& c) {
     inside = true;
     sub_003574C0(c);
     inside = false;
-    if (runs && driving && slick::handling_enabled()) {
+    if (runs && driving && (slick::handling_enabled() || slick::telemetry_enabled())) {
         const u32 player = ld32(ctl + 0x160);
         const u32 car = player ? ld32(player + 0x24) : 0;
         const float speed = car ? ldf(car + 0x3c0) * 3.6f : -1.0f;
         if (std::isfinite(speed) && speed >= 0.0f) {
-            const u64 ms = (u32)(time_usec() / 1000);
-            g_slick_speed.store((ms << 32) | std::bit_cast<u32>(speed), std::memory_order_relaxed);
+            const u64 now = time_usec();
+            if (slick::handling_enabled()) {
+                const u64 ms = (u32)(now / 1000);
+                g_slick_speed.store((ms << 32) | std::bit_cast<u32>(speed), std::memory_order_relaxed);
+            }
+            if (slick::telemetry_enabled()) slick_telemetry(car, speed, now);
         }
     }
     if (runs) ai_drive_update(c, ctl, driving);
