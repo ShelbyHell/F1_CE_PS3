@@ -46,6 +46,7 @@ HOOKS = {0x3FB310: "camera_projection_hook",   # camera projection and frustum, 
          0x1BFC14: "points_hook"}   # mods.cpp: championship points for a finishing position (season pack)
 # debug probes: runtime code called with the context before the instruction at that address
 PROBES = {0x1187EC: "probe_1187ec", 0x11B05C: "probe_11b05c",   # hle_physics.cpp
+          0x1149D4: "slick_wear_probe", 0x114858: "slick_grip_probe", 0x11716C: "slick_drive_probe",
           0x249518: "shake_tick_probe", 0x249B38: "shake_tick_probe",   # hle_physics.cpp: before a main loop tick
           0x249550: "shake_frame_probe", 0x249B40: "shake_frame_probe",   # and after the frame's last tick
           0x489AAC: "flip_label_written",   # hle_gcm.cpp: the flip handler set a label the RSX may wait for

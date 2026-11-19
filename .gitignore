@@ -35,3 +35,10 @@ dbg/rec1/*
 fp_*.glsl
 vp_*.glsl
 freeze_task*.bin
+
+# Local slick test builds, settings and textures generated from the game disc
+/Slick-Test/*.exe
+/Slick-Test/local.cmd
+/Slick-Test/shader_cache/
+/Slick-Test/MODS/
+/Slick-Test/Texture-Preview/

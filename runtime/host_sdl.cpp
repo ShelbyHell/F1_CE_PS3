@@ -98,6 +98,14 @@ void update_pad(SDL_Gamepad* gp) {
         return inputcfg::shape(pad[pos] - pad[neg], g_in.deadzone, curve);
     };
     float lx = stick(LS_LEFT, LS_RIGHT, g_in.curve), ly = stick(LS_UP, LS_DOWN, 100);
+    static const bool handling_pad = [] {
+        const char* mode = getenv("F1CE_SLICK_TEST");
+        return mode && std::strcmp(mode, "handling") == 0;
+    }();
+    if (gp && handling_pad && lx != 0.0f) {
+        // Preserve centre, symmetry and full lock; soften small corrections.
+        lx *= 0.82f + 0.18f * lx * lx;
+    }
     float rx = stick(RS_LEFT, RS_RIGHT, 100), ry = stick(RS_UP, RS_DOWN, 100);
     {   // keyboard steering: towards full lock in steer_ms, back to the centre in centre_ms
         static float kb_steer = 0;

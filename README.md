@@ -40,6 +40,8 @@ executable reads your own `PS3_GAME` folder at runtime.
 
 ## Build
 
+The optional [Slick-Test presets](Slick-Test/README.md) add dry slick textures, experimental tyre physics, and a gamepad handling tune for offline races.
+
 Requirements: Python 3, CMake, Ninja, llvm-mingw (Windows), zig (Linux cross build), SDL3 3.4.18
 sources in `third_party/SDL3-3.4.18`, the decrypted `EBOOT.elf` copied to `input/EBOOT.elf`.
 

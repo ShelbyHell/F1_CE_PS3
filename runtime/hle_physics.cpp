@@ -3,6 +3,7 @@
 // force function 0x11c150 (once per substep and car) for the car whose object holds <ea> (",all" appended: every car), 400
 // calls.
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <cstdlib>
 #include <cstring>
@@ -10,6 +11,73 @@
 
 #include "kernel.h"
 #include "rsx.h"
+
+// Experimental single-player slick preset. Only the tyre state and realistic
+// wear mode observed in the stock dry Quick Race are eligible.
+static int slick_test_car(u32 car) {
+    static const int preset = [] {
+        const char* mode = getenv("F1CE_SLICK_TEST");
+        if (!mode) return 0;
+        if (strcmp(mode, "handling") == 0) return 3;
+        if (strcmp(mode, "2026") == 0) return 2;
+        return strcmp(mode, "1") == 0 ? 1 : 0;
+    }();
+    return preset && ((ld32(car + 0x5f0) >> 12) & 3) == 0 && ld32(car + 0x964) == 2 ? preset : 0;
+}
+
+void slick_wear_probe(PPUContext& c) {
+    if (!slick_test_car((u32)c.r[31])) return;
+    // The stock path still decides whether to accumulate wear, and clamps it.
+    c.f[0].d = (float)c.f[0].d * 1.25f;
+    static std::atomic_flag logged{};
+    if (!logged.test_and_set(std::memory_order_relaxed)) LOG_I("slick test: wear increment x1.25");
+}
+
+void slick_grip_probe(PPUContext& c) {
+    const u32 car = (u32)c.r[31];
+    const int preset = slick_test_car(car);
+    if (!preset) return;
+    const float speed = std::bit_cast<float>(ld32(car + 0x3c0));
+    float factor = 1.05f;
+    if (preset >= 2 && speed >= 0.0f) {
+        // Blend from +14% below 90 km/h to +8% at 260 km/h.
+        factor = 1.14f - 0.06f * std::clamp((speed * 3.6f - 90.0f) / 170.0f, 0.0f, 1.0f);
+    }
+    // This vector is computed afresh, then stored at car + 0x4d0.
+    if (preset == 3 && speed >= 0.0f) {
+        const float fast = std::clamp((speed * 3.6f - 90.0f) / 120.0f, 0.0f, 1.0f);
+        const float front = factor + 0.025f * (1.0f - fast);
+        const float rear = factor + 0.025f * fast;
+        // Guest lanes 0/1 are the front axle; VMX stores lane 0 at f[3].
+        for (int wheel = 0; wheel < 4; ++wheel) c.v[0].f[3 - wheel] *= wheel < 2 ? front : rear;
+        static std::atomic_flag logged{};
+        if (!logged.test_and_set(std::memory_order_relaxed))
+            LOG_I("slick test: handling grip front x%.3f rear x%.3f at %.0f km/h", front, rear, speed * 3.6f);
+        return;
+    }
+    for (int lane = 0; lane < 4; ++lane) c.v[0].f[lane] *= factor;
+    static std::atomic_flag logged{};
+    if (!logged.test_and_set(std::memory_order_relaxed)) LOG_I("slick test: dry grip vector x%.3f (preset %d)", factor, preset);
+}
+
+void slick_drive_probe(PPUContext& c) {
+    const u32 car = (u32)c.r[31];
+    if (slick_test_car(car) < 2 || !(c.f[7].d > 0.0)) return;
+    const u32 gear = ld8(car + 0x9b8);
+    if (gear == 0 || gear > 7 || (ld32(car + 0x980) & 0xc) != 0xc || (ld32(car + 0x97c) & 0xc00) != 0) return;
+    const float speed = std::bit_cast<float>(ld32(car + 0x3c0)) * 3.6f;
+    const float throttle = std::bit_cast<float>(ld32(car + 0x950));
+    if (!(speed >= 15.0f && speed < 280.0f && throttle > 0.45f)) return;
+    // Increase only positive engine output, before the stock clutch/gear and
+    // tyre solver. Fade in after launch, and taper to zero near top speed.
+    const float ramp = std::min(std::clamp((speed - 15.0f) / 45.0f, 0.0f, 1.0f),
+                                std::clamp((280.0f - speed) / 100.0f, 0.0f, 1.0f));
+    const float boost = 0.12f * ramp * std::clamp((throttle - 0.45f) / 0.55f, 0.0f, 1.0f);
+    if (!(boost > 0.0f)) return;
+    c.f[7].d = (float)c.f[7].d * (1.0f + boost);
+    static std::atomic_flag logged{};
+    if (!logged.test_and_set(std::memory_order_relaxed)) LOG_I("slick test: 2026 drive active, +%.1f%% at %.0f km/h", boost * 100.0f, speed);
+}
 
 // Debug: F1CE_PHYS_SNAP=<s>,<car hex>: <s> seconds into the first 3D scene, that car object (0x1390 bytes) and its body
 // object (pointer at +0x140, 0x800 bytes) at the start of 12 consecutive substeps (snap_car_<k>.bin, snap_body_<k>.bin)
