@@ -180,7 +180,7 @@ Combo g_combos[] = {
     {L"Component failure", L"F1CE_QR_FAILURES", {{L"Game menu", nullptr}, {L"Off", L"0"}, {L"On", L"1"}}, 0, QR_RULES},
     {L"Penalties", L"F1CE_QR_PENALTIES", {{L"Game menu", nullptr}, {L"Off", L"0"}, {L"On", L"1"}}, 0, QR_RULES},
     {L"Slick physics", L"F1CE_SLICK_TEST",
-     {{L"Stock", nullptr}, {L"Basic slicks", L"1"}, {L"2026", L"2026"}, {L"2026 - gamepad handling", L"handling"}}, 0, QR_RULES,
+     {{L"Stock", nullptr}, {L"Basic slicks", L"1"}, {L"2026 (with handling)", L"2026"}}, 0, QR_RULES,
      L"Experimental offline dry-tyre physics. Use Realistic tyre wear. Textures are a separate mod pack."},
     {L"Slick compound", L"F1CE_SLICK_COMPOUND", {{L"Baseline", nullptr}, {L"Soft", L"soft"}, {L"Hard", L"hard"}}, 0, QR_RULES},
     {L"Slick telemetry (CSV)", L"F1CE_SLICK_TELEMETRY", {{L"Off", nullptr}, {L"On", L"1"}}, 0, QR_RULES,
@@ -491,9 +491,10 @@ void load_settings() {
     SetWindowTextW(g_path, b);
     for (Combo& c : g_combos) {
         GetPrivateProfileStringW(L"options", c.env, L"", b, MAX_PATH * 2, g_ini.c_str());
+        const wchar_t* saved = !wcscmp(c.env, L"F1CE_SLICK_TEST") && !wcscmp(b, L"handling") ? L"2026" : b;
         int sel = c.def;
         for (size_t i = 0; i < c.choices.size(); i++)
-            if (c.choices[i].value && !wcscmp(c.choices[i].value, b)) sel = (int)i;
+            if (c.choices[i].value && !wcscmp(c.choices[i].value, saved)) sel = (int)i;
         SendMessageW(c.h, CB_SETCURSEL, sel, 0);
     }
     // the Static reflections check box before the Reflections combo (2026-11-17)

@@ -16,19 +16,14 @@
 
 // Experimental single-player slick preset. Only the tyre state and realistic
 // wear mode observed in the stock dry Quick Race are eligible.
-static int slick_test_car(u32 car) {
-    static const int preset = [] {
-        const char* mode = getenv("F1CE_SLICK_TEST");
-        if (!mode) return 0;
-        if (strcmp(mode, "handling") == 0) return 3;
-        if (strcmp(mode, "2026") == 0) return 2;
-        return strcmp(mode, "1") == 0 ? 1 : 0;
-    }();
-    return preset && ((ld32(car + 0x5f0) >> 12) & 3) == 0 && ld32(car + 0x964) == 2 ? preset : 0;
+static slick::Preset slick_test_car(u32 car) {
+    const auto preset = slick::selected_preset();
+    return preset != slick::Preset::stock && ((ld32(car + 0x5f0) >> 12) & 3) == 0 && ld32(car + 0x964) == 2
+               ? preset : slick::Preset::stock;
 }
 
 void slick_wear_probe(PPUContext& c) {
-    if (!slick_test_car((u32)c.r[31])) return;
+    if (slick_test_car((u32)c.r[31]) == slick::Preset::stock) return;
     // The stock path still decides whether to accumulate wear, and clamps it.
     const float rate = slick::wear_multiplier(slick::selected_compound());
     c.f[0].d = (float)c.f[0].d * rate;
@@ -38,20 +33,17 @@ void slick_wear_probe(PPUContext& c) {
 
 void slick_grip_probe(PPUContext& c) {
     const u32 car = (u32)c.r[31];
-    const int preset = slick_test_car(car);
-    if (!preset) return;
+    const auto preset = slick_test_car(car);
+    if (preset == slick::Preset::stock) return;
     const float speed = std::bit_cast<float>(ld32(car + 0x3c0));
-    float factor = 1.05f;
-    if (preset >= 2 && speed >= 0.0f) {
-        // Blend from +14% below 90 km/h to +8% at 260 km/h.
-        factor = 1.14f - 0.06f * std::clamp((speed * 3.6f - 90.0f) / 170.0f, 0.0f, 1.0f);
-    }
     // This vector is computed afresh, then stored at car + 0x4d0.
-    float front = factor, rear = factor;
-    if (preset == 3 && speed >= 0.0f) {
-        const float fast = std::clamp((speed * 3.6f - 90.0f) / 120.0f, 0.0f, 1.0f);
-        front += 0.025f * (1.0f - fast);
-        rear += 0.025f * fast;
+    float front = 1.05f, rear = 1.05f;
+    if (preset == slick::Preset::modern && speed >= 0.0f) {
+        const float above_90 = speed * 3.6f - 90.0f;
+        const float base = 1.14f - 0.06f * std::clamp(above_90 / 170.0f, 0.0f, 1.0f);
+        const float fast = std::clamp(above_90 / 120.0f, 0.0f, 1.0f);
+        front = base + 0.025f * (1.0f - fast);
+        rear = base + 0.025f * fast;
     }
     const auto compound = slick::selected_compound();
     // Guest lanes 0/1 are the front axle; VMX stores lane 0 at f[3].
@@ -61,12 +53,13 @@ void slick_grip_probe(PPUContext& c) {
     }
     static std::atomic_flag logged{};
     if (!logged.test_and_set(std::memory_order_relaxed))
-        LOG_I("slick test: dry grip base front x%.3f rear x%.3f (preset %d, compound %d)", front, rear, preset, (int)compound);
+        LOG_I("slick test: dry grip base front x%.3f rear x%.3f (%s, compound %d)", front, rear,
+              preset == slick::Preset::modern ? "2026" : "basic", (int)compound);
 }
 
 void slick_drive_probe(PPUContext& c) {
     const u32 car = (u32)c.r[31];
-    if (slick_test_car(car) < 2) return;
+    if (slick_test_car(car) != slick::Preset::modern) return;
     struct Slot { u32 car = 0; u64 seen = 0; slick::DriveResponse response; };
     static thread_local std::array<Slot, 32> cars{};
     auto it = std::find_if(cars.begin(), cars.end(), [car](const Slot& s) { return s.car == car; });

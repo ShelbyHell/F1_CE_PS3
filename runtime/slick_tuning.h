@@ -3,15 +3,26 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <string_view>
 
 namespace slick {
-inline bool handling_enabled() {
-    static const bool enabled = [] {
-        const char* mode = std::getenv("F1CE_SLICK_TEST");
-        return mode && std::strcmp(mode, "handling") == 0;
-    }();
-    return enabled;
+enum class Preset { stock, basic, modern };
+
+inline constexpr Preset parse_preset(std::string_view mode) {
+    if (mode == "2026" || mode == "handling") return Preset::modern;
+    if (mode == "1") return Preset::basic;
+    return Preset::stock;
 }
+
+inline Preset selected_preset() {
+    static const Preset preset = [] {
+        const char* mode = std::getenv("F1CE_SLICK_TEST");
+        return parse_preset(mode ? mode : "");
+    }();
+    return preset;
+}
+
+inline bool handling_enabled() { return selected_preset() == Preset::modern; }
 
 inline float pad_steer(float x, float kmh) {
     const float fast = std::clamp((kmh - 90.0f) / 150.0f, 0.0f, 1.0f);

@@ -263,7 +263,7 @@ std::vector<Option> make_options() {
                        0, qr));
     v.push_back(header(QUICK_RACE, "Experimental slick tyres"));
     v.push_back(choice(QUICK_RACE, "Slick physics", "F1CE_SLICK_TEST",
-                       {{"Stock", nullptr}, {"Basic slicks", "1"}, {"2026", "2026"}, {"2026 - gamepad handling", "handling"}},
+                       {{"Stock", nullptr}, {"Basic slicks", "1"}, {"2026 (with handling)", "2026"}},
                        0, "Experimental offline physics for dry tyres. Use Realistic tyre wear. Textures are a separate mod pack."));
     v.push_back(greyed(choice(QUICK_RACE, "Slick compound", "F1CE_SLICK_COMPOUND",
                        {{"Baseline", nullptr}, {"Soft", "soft"}, {"Hard", "hard"}}, 0,
@@ -611,9 +611,11 @@ void load(const Ini& ini) {
     for (Option& o : g_options) {
         if (o.kind == CHOICE) {
             o.sel = o.def;
-            if (const std::string* v = ini.get("options", o.key))
+            if (const std::string* v = ini.get("options", o.key)) {
+                const std::string_view saved = o.key == std::string_view("F1CE_SLICK_TEST") && *v == "handling" ? "2026" : std::string_view(*v);
                 for (size_t i = 0; i < o.choices.size(); i++)
-                    if (o.choices[i].value && *v == o.choices[i].value) o.sel = (int)i;
+                    if (o.choices[i].value && saved == o.choices[i].value) o.sel = (int)i;
+            }
         } else if (o.kind == TOGGLE) {
             o.sel = ini.get_int("options", o.key, 0) != 0;
         } else if (o.kind == TEXT) {

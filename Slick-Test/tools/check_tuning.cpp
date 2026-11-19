@@ -5,6 +5,10 @@
 #include <cmath>
 
 int main() {
+    static_assert(slick::parse_preset("2026") == slick::Preset::modern);
+    static_assert(slick::parse_preset("handling") == slick::parse_preset("2026"));
+    static_assert(slick::parse_preset("1") == slick::Preset::basic);
+    static_assert(slick::parse_preset("0") == slick::Preset::stock);
     const auto close = [](float a, float b) { return std::fabs(a - b) < 0.0001f; };
     assert(close(slick::pad_steer(1.0f, 90.0f), 1.0f));
     assert(close(slick::pad_steer(-1.0f, 240.0f), -0.78f));
