@@ -33,6 +33,18 @@ The generator writes dry tread colour, normal, and specular maps to `MODS/SLICK_
 
 The 2026 preset is a handling approximation, not a simulation of the 2026 F1 power unit. Rear wheelspin tapers existing extra torque over about 45 ms; it takes about 180 ms to recover full boost after regaining traction. Lifting off, leaving a forward gear or losing rear contact still removes the boost immediately. Compare against the stock preset, or compare the two textured presets to isolate the handling changes.
 
+### Dry compounds
+
+Set `F1CE_SLICK_COMPOUND=soft` or `hard` before launch (or in `local.cmd`). Leave it unset for the baseline. This is a session-wide preset for eligible dry tyres, not an extra compound choice in the game's pit menu. It has no effect with stock physics.
+
+| Compound | Wear rate vs. stock | Extra grip factor vs. the selected preset |
+| --- | --- | --- |
+| Baseline | ×1.25 | ×1.00 |
+| Soft | ×1.55 | ×1.04 fresh, falling to ×0.92 with wear |
+| Hard | ×0.90 | ×0.98 fresh, falling to ×0.965 with wear |
+
+The grip curve uses each wheel's own wear value and saturates at `0.65` internal wear units. The factors are initial tuning targets, not measured stint lengths.
+
 ## Verification
 
 Dry Silverstone runs confirmed activation of the grip, wear, and drive changes in `f1ce_recomp.log` (look for `slick test:`). The texture run confirmed all three replacements in `offline.wad`, and the smooth tread was visible on track. Lap times, acceleration times, tyre life, and hands-on gamepad feel have not been measured.

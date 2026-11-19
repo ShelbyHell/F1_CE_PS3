@@ -35,6 +35,30 @@ struct DriveResponse {
     }
 };
 
+enum class Compound { baseline, soft, hard };
+
+inline Compound selected_compound() {
+    static const Compound value = [] {
+        const char* name = std::getenv("F1CE_SLICK_COMPOUND");
+        if (name && std::strcmp(name, "soft") == 0) return Compound::soft;
+        if (name && std::strcmp(name, "hard") == 0) return Compound::hard;
+        return Compound::baseline;
+    }();
+    return value;
+}
+
+inline float wear_multiplier(Compound compound) {
+    return compound == Compound::soft ? 1.55f : compound == Compound::hard ? 0.90f : 1.25f;
+}
+
+inline float compound_grip(Compound compound, float wear) {
+    // Wear is the observed internal per-wheel value, not a percentage.
+    const float used = wear > 0.0f ? std::min(wear / 0.65f, 1.0f) : 0.0f;
+    if (compound == Compound::soft) return 1.04f - 0.12f * used;
+    if (compound == Compound::hard) return 0.98f - 0.015f * used;
+    return 1.0f;
+}
+
 // A negative value means the player controller is not currently updating.
 float player_speed_kmh();
 }

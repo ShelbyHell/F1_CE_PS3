@@ -30,9 +30,10 @@ static int slick_test_car(u32 car) {
 void slick_wear_probe(PPUContext& c) {
     if (!slick_test_car((u32)c.r[31])) return;
     // The stock path still decides whether to accumulate wear, and clamps it.
-    c.f[0].d = (float)c.f[0].d * 1.25f;
+    const float rate = slick::wear_multiplier(slick::selected_compound());
+    c.f[0].d = (float)c.f[0].d * rate;
     static std::atomic_flag logged{};
-    if (!logged.test_and_set(std::memory_order_relaxed)) LOG_I("slick test: wear increment x1.25");
+    if (!logged.test_and_set(std::memory_order_relaxed)) LOG_I("slick test: wear increment x%.2f", rate);
 }
 
 void slick_grip_probe(PPUContext& c) {
@@ -46,20 +47,21 @@ void slick_grip_probe(PPUContext& c) {
         factor = 1.14f - 0.06f * std::clamp((speed * 3.6f - 90.0f) / 170.0f, 0.0f, 1.0f);
     }
     // This vector is computed afresh, then stored at car + 0x4d0.
+    float front = factor, rear = factor;
     if (preset == 3 && speed >= 0.0f) {
         const float fast = std::clamp((speed * 3.6f - 90.0f) / 120.0f, 0.0f, 1.0f);
-        const float front = factor + 0.025f * (1.0f - fast);
-        const float rear = factor + 0.025f * fast;
-        // Guest lanes 0/1 are the front axle; VMX stores lane 0 at f[3].
-        for (int wheel = 0; wheel < 4; ++wheel) c.v[0].f[3 - wheel] *= wheel < 2 ? front : rear;
-        static std::atomic_flag logged{};
-        if (!logged.test_and_set(std::memory_order_relaxed))
-            LOG_I("slick test: handling grip front x%.3f rear x%.3f at %.0f km/h", front, rear, speed * 3.6f);
-        return;
+        front += 0.025f * (1.0f - fast);
+        rear += 0.025f * fast;
     }
-    for (int lane = 0; lane < 4; ++lane) c.v[0].f[lane] *= factor;
+    const auto compound = slick::selected_compound();
+    // Guest lanes 0/1 are the front axle; VMX stores lane 0 at f[3].
+    for (int wheel = 0; wheel < 4; ++wheel) {
+        const float wear = compound == slick::Compound::baseline ? 0.0f : std::bit_cast<float>(ld32(car + 0x8b0 + 4 * wheel));
+        c.v[0].f[3 - wheel] *= (wheel < 2 ? front : rear) * slick::compound_grip(compound, wear);
+    }
     static std::atomic_flag logged{};
-    if (!logged.test_and_set(std::memory_order_relaxed)) LOG_I("slick test: dry grip vector x%.3f (preset %d)", factor, preset);
+    if (!logged.test_and_set(std::memory_order_relaxed))
+        LOG_I("slick test: dry grip base front x%.3f rear x%.3f (preset %d, compound %d)", front, rear, preset, (int)compound);
 }
 
 void slick_drive_probe(PPUContext& c) {
