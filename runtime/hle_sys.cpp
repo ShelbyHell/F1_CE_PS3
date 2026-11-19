@@ -66,8 +66,23 @@ HLE_FUNC(sys_process_exit) {
     LOG_I("sys_process_exit(%lld)", (long long)(s32)ARG(0));
     process_exit((int)(s32)ARG(0));
 }
+// sys_game_process_exitspawn(path, argv, envp, data, data_size, prio, flags): the front end's Multiplayer entry starts
+// /dev_bdvd/PS3_GAME/USRDIR/ONLINE.BIN, which returns to EBOOT.BIN with a language argument. Each executable is its own
+// build (f1ce_online / f1ce, next to each other), so this starts the other one on the same game folder with the
+// arguments (argv: 32-bit pointers, null-terminated) and leaves. The environment (F1CE_*) and working directory carry over.
 HLE_FUNC(sys_game_process_exitspawn) {
-    LOG_I("sys_game_process_exitspawn(%s)", gstr((u32)ARG(0)).c_str());
+    const std::string path = gstr((u32)ARG(0));
+    std::vector<std::string> args;
+    for (u32 v = (u32)ARG(1); v && args.size() < 16 && ld32(v); v += 4) args.push_back(gstr(ld32(v), 256));
+    std::string list;
+    for (const std::string& a : args) list += " '" + a + "'";
+    LOG_I("sys_game_process_exitspawn(%s)%s", path.c_str(), list.c_str());
+    std::string upper = path;
+    for (char& ch : upper) ch = (char)toupper((unsigned char)ch);
+    const bool online = upper.size() >= 10 && upper.compare(upper.size() - 10, 10, "ONLINE.BIN") == 0;
+    extern std::string g_game_dir;
+    if (!spawn_sibling(online ? "f1ce_online" : "f1ce", g_game_dir, args))
+        LOG_E("exitspawn: could not start %s", online ? "f1ce_online" : "f1ce");
     process_exit(0);
 }
 HLE_FUNC(sys_prx_exitspawn_with_level) { process_exit(0); }

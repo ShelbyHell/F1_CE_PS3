@@ -683,8 +683,10 @@ class _Nearest:
         same = [i for i in cands if d2[i] <= best + 1e-10]      # coincident vertices (UV seams): closest UV
         if len(same) == 1:
             return same[0]
-        # UV seams and hard edges: same position, different uv0, normal or decal uv1
-        return min(same, key=lambda i: (sum((self.uv[i][j] - uv[j]) ** 2 for j in range(2)) if self.uv and uv else 0) +
+        # UV seams and hard edges: same position, different uv0, normal or decal uv1; the distance itself decides
+        # between vertices only microns apart with the same attributes (BMW steering wheel display)
+        return min(same, key=lambda i: d2[i] +
+                   (sum((self.uv[i][j] - uv[j]) ** 2 for j in range(2)) if self.uv and uv else 0) +
                    (sum((self.nrm[i][j] - n[j]) ** 2 for j in range(3)) if self.nrm and n else 0) +
                    (sum((self.uv1[i][j] - uv1[j]) ** 2 for j in range(2)) if self.uv1 and uv1 else 0))
 

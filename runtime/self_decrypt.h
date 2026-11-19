@@ -10,7 +10,8 @@ namespace eboot {
 
 // USRDIR/EBOOT.BIN decrypted, else (a missing or unusable EBOOT.BIN) USRDIR/EBOOT.elf, checked against the
 // executable this build was made from. Returns an error message for the player; empty: elf holds the executable.
-std::string load(const std::filesystem::path& game, std::vector<uint8_t>& elf);
+// stem "ONLINE": the multiplayer executable USRDIR/ONLINE.BIN (or ONLINE.elf) instead.
+std::string load(const std::filesystem::path& game, std::vector<uint8_t>& elf, const char* stem = "EBOOT");
 
 // a retail (or fake-signed) PPU SELF to its ELF, laid out as RPCS3's decrypter writes it
 std::string decrypt_self(const std::vector<uint8_t>& self, std::vector<uint8_t>& elf);

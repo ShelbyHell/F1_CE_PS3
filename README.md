@@ -45,6 +45,7 @@ sources in `third_party/SDL3-3.4.18`, the decrypted `EBOOT.elf` copied to `input
 
 ```sh
 python tools/recomp.py                     # regenerate generated/*.cpp
+python tools/recomp.py online              # ONLINE.BIN (input/ONLINE.elf) -> generated_online/*.cpp, builds f1ce_online
 cmake -S . -B build-win -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/windows-llvm-mingw.cmake
 cmake --build build-win -j 6
 python tools/linux_sysroot.py              # once: Linux headers for SDL's X11/audio/input backends
@@ -132,6 +133,29 @@ which slows the game noticeably in Git Bash / the Windows console).
 
 Keyboard: arrows = d-pad, **Z** = ✕, **X** = ◯, **A** = □, **S** = △, **Q/W** = L1/R1, **1/2** = L2/R2,
 **Enter** = Start, **Backspace** = Select, **I/J/K/L** = right stick (turns the external cameras). Gamepads are supported through SDL.
+
+### Multiplayer
+
+The front end's Multiplayer entry starts the game's second executable, `USRDIR/ONLINE.BIN` (`sys_game_process_exitspawn`
+with the argument `{0}`); here that is `f1ce_online`, built next to `f1ce` and started by it with the same game folder
+(and back to `f1ce` when you leave Multiplayer). ONLINE.BIN is decrypted at start like EBOOT.BIN and checked against
+its own hash. Its online framework is SCE-RT "Unity" (Medius lobby, DME networking, SVML menu pages in online.wad).
+Play Online needs the Medius servers and PSN, which are gone; **Play LAN** works and is made to work over the internet
+the way Yuzu/Eden rooms do (`runtime/hle_net.cpp`):
+
+- Each game is a member of a virtual LAN 10.13.37.0/24 relayed by a room: the host's game runs the room (TCP port
+  51015, the only port to forward) and joins it as 10.13.37.1; the others join by address. Broadcasts go to every
+  member, other packets to their address. The game's whole LAN session (discovery, lobby, race) is one UDP socket on
+  port 3658, broadcast discovery included.
+- `F1CE_NET_MODE=host|join`, `F1CE_NET_ADDR=<host>[:port]` (join), `F1CE_NET_PORT` (default 51015),
+  `F1CE_NET_NAME`, `F1CE_NET_PASSWORD`, `F1CE_NET_LOG=1` (every socket call). The new launcher's Multiplayer section
+  sets them. `f1ce_online --room` runs a room without a game. Without a room the LAN has only this game.
+- In the game: Multiplayer > Play LAN > user name (the game's keyboard) > Create Game (host) / Join Game (the others).
+- cellNetCtl reports a wired connection with the member's address; sceNp is never signed in (Play Online stops there).
+
+Not done: the room relays the game's UDP over TCP (a lost packet delays the ones after it); EBOOT's runtime hooks
+(widescreen field of view, camera, physics smoothing, 60 fps, mods, performance probes) are not ported to
+ONLINE.BIN's addresses, so f1ce_online runs without them.
 
 ### Steering wheels
 

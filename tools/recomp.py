@@ -1,4 +1,5 @@
 """Static recompiler: translates every PPU function of EBOOT.elf into C++.
+`python tools/recomp.py online` translates ONLINE.elf (the multiplayer executable) into ../generated_online instead.
 
 Output (in ../generated):
   ppu_funcs.h          declarations of every translated function
@@ -373,6 +374,21 @@ class FuncGen:
             return f"{{ u32 ea = {ea}; {val}" + (f" c.r[{ra}] = ea;" if upd else "") + " }"
         if m == "stfiwx":
             return f"st32({self.ea_x(w)}, (u32)c.f[{s}].u);"
+        if m in ("lswi", "stswi"):   # (ONLINE.BIN's small struct copies) NB bytes, 4 per register from rD/rS on
+            n = RB(w) or 32
+            ea = f"(u32)c.r[{ra}]" if ra else "0u"
+            reg = d if m == "lswi" else s
+            out = [f"{{ u32 ea = {ea};"]
+            if m == "lswi":
+                for k in range((n + 3) // 4):
+                    out.append(f"c.r[{(reg + k) % 32}] = 0;")
+            for k in range(n):
+                rr, sh = (reg + k // 4) % 32, 24 - 8 * (k % 4)
+                if m == "lswi":
+                    out.append(f"c.r[{rr}] |= (u64)ld8(ea + {k}) << {sh};")
+                else:
+                    out.append(f"st8(ea + {k}, (u8)(c.r[{rr}] >> {sh}));")
+            return " ".join(out) + " }"
         if m in ("lwbrx", "lhbrx", "ldbrx"):
             fn = {"lwbrx": "ld32le", "lhbrx": "ld16le", "ldbrx": "ld64le"}[m]
             return f"c.r[{d}] = (u64){fn}({self.ea_x(w)});"
@@ -750,12 +766,24 @@ class Recompiler:
         for s, nm, imp in stub_names:
             # the original stub saves the caller's TOC at 40(r1); callers reload r2 from there
             stub_src.append(f"PPU_FUNC({nm}) {{ st64((u32)c.r[1] + 40, c.r[2]); hle_call(c, {imp_index[id(imp)]}); }}")
+        # the runtime calls a few EBOOT functions by name from its EBOOT hooks (never run in another image): defined
+        # here when this image has no function at that address, so the shared runtime links
+        defined = {nm for _, nm in names}
+        refs = set()
+        import re
+        for src in sorted((ROOT / "runtime").glob("*.cpp")):
+            refs |= set(re.findall(r"void (sub_[0-9A-F]{8})\(PPUContext", src.read_text(errors="replace")))
+        if refs - defined:
+            stub_src.append("[[noreturn]] void fatal(const char* fmt, ...);")
+        for nm in sorted(refs - defined):
+            stub_src.append(f'PPU_FUNC({nm}) {{ fatal("{nm}: an EBOOT function, not in this executable"); }}')
         stub_src.append("")
         stub_src.append("const ImportInfo g_imports[] = {")
         for imp in self.elf.imports:
             stub_src.append(f'\t{{ "{imp.library}", "{imp.name}", 0x{imp.nid:08X}u, 0x{imp.stub_slot:X}u }},')
         stub_src.append("};")
         stub_src.append(f"const u32 g_import_count = {len(self.elf.imports)};")
+        stub_src.append(f"const bool g_online_image = {'true' if OUT.name == 'generated_online' else 'false'};")
         write("ppu_imports.cpp", "\n".join(stub_src) + "\n")
 
         table = ['#include "ppu_funcs.h"', "", "const FuncEntry g_func_table[] = {"]
@@ -779,4 +807,11 @@ class Recompiler:
 
 
 if __name__ == "__main__":
-    Recompiler(ps3elf.load(ROOT / "input" / "EBOOT.elf")).run()
+    if sys.argv[1:] == ["online"]:
+        # ONLINE.BIN, the multiplayer executable the game exitspawns into (built as f1ce_online): another build
+        # of the engine, so none of EBOOT's hook, probe or spin-loop addresses apply to it
+        OUT = ROOT / "generated_online"
+        HOOKS, PROBES, SPIN_LOOPS = {}, {}, set()
+        Recompiler(ps3elf.load(ROOT / "input" / "ONLINE.elf")).run()
+    else:
+        Recompiler(ps3elf.load(ROOT / "input" / "EBOOT.elf")).run()

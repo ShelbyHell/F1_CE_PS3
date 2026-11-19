@@ -33,7 +33,7 @@ HLE_FUNC(cellPadGetData) {
     if (port != 0) { st32(p, 0); RET(CELL_OK); }
     host::PadState s = host::pad_state();
     if (overlay::input_captured()) s = {};   // a system dialog (overlay.h) has the pad
-    quick_race_overrides(s.digital1, s.lx, s.ly);
+    if (!g_online_image) quick_race_overrides(s.digital1, s.lx, s.ly);   // (EBOOT addresses)
     rumble_update();
     st32(p, 24);
     u16 b[24] = {};
@@ -81,13 +81,14 @@ struct SysutilCb { u32 func = 0, userdata = 0; };
 std::array<SysutilCb, 4> g_sysutil_cbs;
 std::mutex g_sysutil_mutex;
 struct PendingCall { u32 func, a0, a1, a2; };
-std::deque<PendingCall> g_pending;   // callbacks delivered on cellSysutilCheckCallback
+// callbacks delivered on cellSysutilCheckCallback; func 0: a system event for the callbacks registered when it is
+// delivered (ONLINE.BIN registers its callback right after cellNetCtlNetStartDialogLoadAsync)
+std::deque<PendingCall> g_pending;
 }  // namespace
 
 void sysutil_post_event(u32 status, u32 param) {
     std::lock_guard lk(g_sysutil_mutex);
-    for (auto& cb : g_sysutil_cbs)
-        if (cb.func) g_pending.push_back({cb.func, status, param, cb.userdata});
+    g_pending.push_back({0, status, param, 0});
 }
 
 HLE_FUNC(cellSysutilRegisterCallback) {
@@ -117,7 +118,17 @@ HLE_FUNC(cellSysutilCheckCallback) {
             p = g_pending.front();
             g_pending.pop_front();
         }
-        guest_call(c, p.func, {p.a0, p.a1, p.a2});
+        if (p.func) {
+            guest_call(c, p.func, {p.a0, p.a1, p.a2});
+            continue;
+        }
+        std::array<SysutilCb, 4> cbs;
+        {
+            std::lock_guard lk(g_sysutil_mutex);
+            cbs = g_sysutil_cbs;
+        }
+        for (auto& cb : cbs)
+            if (cb.func) guest_call(c, cb.func, {p.a0, p.a1, cb.userdata});
     }
     RET(CELL_OK);
 }

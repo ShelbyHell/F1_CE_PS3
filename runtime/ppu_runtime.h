@@ -144,6 +144,8 @@ struct ImportInfo { const char* library; const char* name; u32 nid; u32 slot; };
 extern const FuncEntry g_func_table[];
 extern const u32 g_func_count;
 extern const ImportInfo g_imports[];
+// the executable translated into this build: ONLINE.BIN (f1ce_online, multiplayer) or EBOOT.BIN (f1ce)
+extern const bool g_online_image;
 extern const u32 g_import_count;
 
 // ------------------------------------------------------------------ runtime services

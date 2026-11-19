@@ -1181,3 +1181,29 @@ Race-start SPU load (2026-11-17, later): profile at the Silverstone race start (
 - The cube pass passes a face mask on its stack to the scene render 0x43B528 (r1 + 112 at 0x2F0FB0, 0x3F = six faces). `F1CE_CUBE_HZ=half` (both launchers: "Every frame, 3 faces at a time"; F1CE_CUBE_SPLIT=1 with any rate) alternates 0x07 / 0x38 in cube_scene_hook after a scene's first 0.5 s, and cube_wait_hook then waits only for the rendered faces' fences (0x2F0390 waits six (index, list) pairs at cube + 16; with all six it hung in 0x551228 on face 5, whose fence never comes). Result: draws 3161 -> 2943 per frame, SPU 60.1 -> 56.7 M per frame (about 30% of the pass; the rest does not depend on the face count), matching 5 s windows 42-47 -> 46-48 fps on OpenGL, Vulkan 56 -> 57 (near the cap). Image as before. The shadow flicker check (period-2 detector on consecutive grid frames) found nothing in any mode, including the known-bad F1CE_CUBE_ALT: the Silverstone grid does not show that fault, so the split is untested against it (a pass still runs every frame, unlike the 30 Hz skip).
 - Later: render targets at scale 2 (`F1CE_MEM_TARGETS=1` list): of ~590 MB nearly all is drawn every frame (main target with MSAA 4x 149 MB, eight 1280x720 depth targets of 19 MB); stale in the race only the menu's 1280x720 colour + depth (34 MB), the menu cube faces are still looked up. Vulkan now releases targets neither drawn into nor sampled (flip, copies and cube face copies count) for the eviction time, except main-memory targets and depth images attached to a live colour target. OpenGL got the same texture release (shared evict_cutoff_frame in rsx_common.cpp). 10 s limit tests on both renderers: 30 fps, frames correct, warnings as before.
 Tyre makers and tyre models (2026-11-15, branch modding): a car's tyre maker is its sidewall texture set (entities cars field 68 + `_Blur0-3.gtf`; the sidewall normal map has no lettering). `season_pack.py` gets tyre maker helpers and a `tyremaker` command (custom sets `WHEELS/SideWalls/<name>_SideWall_Blur0-3.png`, added by build as new entries of offline.wad and stream.wad: the game's wad lookup 0x4A4B8 scans linearly, so appended entries are found); `template --models` exports the shared wheel model (`wheels.sg`, lod0-2) and the garage wheels (`wheels_fe.sg`) as OBJ + glTF using the pack's WHEELS PNGs; the Content Manager's "Rims and tyres" tab has a Tyre maker choice per team. Checked: Blender round trip byte-identical; 1.3x wider tyres and a red custom maker on Honda in a Quick Race and the driver select garage.
+Steering wheels and the live display (2026-11-17): the wheel is `Animations/Driver/Body/` + car field 14 + `SteeringWheel.sg` (low detail drivers: Generic; classics: car field 55 folder), car field 60 is a dash model (McLarenDash, WilliamsFw18Dash) hung on the car's dash / dashboard node; every display mesh uses `Textures/SWDisplay.gtf`, which the loader swaps (0x2DE3D0) for a texture the game redraws each frame (0x2F8CDC) from `LCDDisplaySource.gtf`, tinting each part in code. Season packs get `STEERING/` (textures, glyph sheet, OBJ/glTF models; `season_pack.py steering`), the Content Manager a Steering wheels tab; sg.py nearest-vertex tie fixed (BMW display). Seen in game: a recoloured, enlarged Honda wheel and recoloured digits.
+
+Multiplayer (2026-11-18): the front end's Multiplayer entry exitspawns `/dev_bdvd/PS3_GAME/USRDIR/ONLINE.BIN` (argv
+`{0}`; ONLINE.BIN's main takes /app_home from argv[0] and looks for '{' in argv[1]; it returns to EBOOT.BIN the same
+way). ONLINE.BIN is a 10 MB SELF (same key revision as EBOOT, image hash 0x3e651d039bca2e80), another build of the
+engine plus SCE-RT Unity 3.1 (Medius client 3.01, DME, svoclient, SVML pages in online.wad, 579 of them). Imports
+EBOOT does not have: sys_net (22 BSD socket calls, all through one platform layer 0x56D364..0x56F4D0), cellNetCtl (7),
+sceNp (22: manager/basic/ticket only, no NP matching), cellRtc, cellSysCacheMount; names added to tools/nid_names.txt.
+- `tools/recomp.py online` -> generated_online (22922 functions, no hooks/probes; lswi/stswi added: 48 each, small
+  struct copies); CMake builds f1ce and f1ce_online from one runtime object library (`g_online_image` tells them
+  apart; runtime functions that call EBOOT code by name get fatal stubs in the online image). The data segment
+  window grew to 32 MiB (ONLINE.BIN's .bss ends at 0x110283E8). exitspawn starts the sibling executable
+  (`spawn_sibling`, keeps a name suffix) with `--guest-arg`; the ImGui launcher waits for the whole chain (job object /
+  child subreaper).
+- Fixes found on the way: the RSX flow log read jump targets through IO page 0 (fault on an unmapped target);
+  sysutil events are now dispatched to the callbacks registered at delivery (ONLINE.BIN registers its callback right
+  after cellNetCtlNetStartDialogLoadAsync, and LAN mode waited forever for FINISHED).
+- runtime/hle_net.cpp: virtual LAN 10.13.37.0/24 relayed by a room (Yuzu/Eden style), sockets emulated on it
+  (datagrams, broadcasts, streams, poll/select, errno), cellNetCtl connected, sceNp offline (its sign-in state machine
+  retries every frame while offline, as it would on a PS3). The LAN session is one UDP socket on port 3658 (SO_BROADCAST,
+  non-blocking): 6-byte announcements from a host, 160-byte queries and 476-byte game descriptions, then the DME traffic.
+- Tested on one PC, two f1ce_online with a room on 127.0.0.1: the client's Game List shows the host's game, it joins the
+  lobby (both players listed), the host starts the race, both load Bahrain and drive with each other in the standings.
+  Not tested: two PCs / internet latency, races to the finish, more than two players, Linux.
+- Menu script for tests: profile load needs F1CE_SAVE_UI=0; LAN user name with the game keyboard (down, down, right,
+  cross = "a" ...; the check mark then focuses Create User Name by itself).

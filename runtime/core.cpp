@@ -456,7 +456,7 @@ u64 process_cpu_usec() {
 // system RAM the GPU uses)
 std::string process_mem_report() {
     static const struct { const char* name; u32 base, size; } ranges[] = {
-        {"main", 0x00010000, 0x11000000 - 0x10000}, {"heap", mem::MAIN_HEAP, mem::MAIN_HEAP_SIZE},
+        {"main", 0x00010000, 0x12000000 - 0x10000}, {"heap", mem::MAIN_HEAP, mem::MAIN_HEAP_SIZE},
         {"user", mem::USER_BASE, mem::USER_SIZE}, {"local", mem::RSX_LOCAL, mem::RSX_LOCAL_SIZE},
         {"stacks", mem::STACK_BASE, mem::STACK_SIZE}};
     constexpr u32 PAGE = 4096, STEP = 16;
@@ -605,7 +605,7 @@ void init() {
 #endif
     if (!g_base) fatal("cannot reserve guest address space");
     commit(0x00010000, 0x10000000 - 0x10000);   // ELF image + main memory
-    commit(0x10000000, 0x01000000);             // ELF data segment
+    commit(0x10000000, 0x02000000);             // ELF data segment (ONLINE.BIN's ends at 0x110283E8)
     commit(MAIN_HEAP, MAIN_HEAP_SIZE);
     commit(USER_BASE, USER_SIZE);
     commit(RSX_LOCAL, RSX_LOCAL_SIZE);
@@ -1323,22 +1323,30 @@ void start_watchdog(u32 period_s) {
 
 void thread_exit(PPUContext& c, u64 status) { throw ThreadExit{status}; }
 
-void run_main_thread(u32 entry_opd, u32 stack_size, s32 prio) {
+void run_main_thread(u32 entry_opd, u32 stack_size, s32 prio, const std::vector<std::string>& args) {
     build_dispatch();
     u32 id;
     PPUThread* t = thread_create(entry_opd, 0, prio, stack_size, true, "main", &id);
     auto& c = t->ctx;
     // crt0 register contract (see crt0 analysis): argc/argv/envp, then TLS info for sys_initialize_tls
-    // argv/envp are arrays of 64-bit big-endian pointers (crt0 copies the low words)
-    u32 argv = mem::alloc(32, 16);
-    u32 arg0 = mem::alloc(64);
-    gstr_write(arg0, "/app_home/EBOOT.BIN", 64);
-    st64(argv, arg0);
-    st64(argv + 8, 0);
-    st64(argv + 16, 0);   // envp terminator
-    c.r[3] = 1;
+    // argv/envp are arrays of 64-bit big-endian pointers (crt0 copies the low words); argv[0] is the executable (main
+    // takes /app_home from it), then the arguments a sys_game_process_exitspawn passed (--guest-arg; main looks for
+    // a '{' in argv[1])
+    std::vector<std::string> list{g_online_image ? "/app_home/ONLINE.BIN" : "/app_home/EBOOT.BIN"};
+    list.insert(list.end(), args.begin(), args.end());
+    const u32 argc = (u32)list.size();
+    u32 argv = mem::alloc(8 * (argc + 2), 16);
+    for (u32 i = 0; i < argc; i++) {
+        const std::string& a = list[i];
+        u32 s = mem::alloc((u32)a.size() + 1);
+        gstr_write(s, a.c_str(), (u32)a.size() + 1);
+        st64(argv + 8 * i, s);
+    }
+    st64(argv + 8 * argc, 0);
+    st64(argv + 8 * (argc + 1), 0);   // envp terminator
+    c.r[3] = argc;
     c.r[4] = argv;
-    c.r[5] = argv + 16;
+    c.r[5] = argv + 8 * (argc + 1);
     c.r[6] = 0;
     c.r[7] = id;
     c.r[8] = g_tls_addr;

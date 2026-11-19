@@ -9,8 +9,9 @@ PS3_GAME/
 ghidra/project/
 out/
 
-# PPU translation: rebuilt by tools/recomp.py
+# PPU translation: rebuilt by tools/recomp.py (generated_online: tools/recomp.py online)
 generated/*
+generated_online/
 # SPU translation stays: it needs blocks recorded in play (tools/spu_aot.py)
 !generated/spu/
 

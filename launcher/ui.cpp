@@ -552,8 +552,8 @@ void start_game() {
 }
 
 // ---------------------------------------------------------------- the frame
-const char* const SECTION_NAMES[opts::PAGES] = {"GENERAL",  "VIDEO",          "QUICK RACE", "KEYBOARD",
-                                                "GAMEPAD", "STEERING WHEEL", "DEVELOPER"};
+const char* const SECTION_NAMES[opts::PAGES] = {"GENERAL",  "VIDEO",          "QUICK RACE",  "KEYBOARD",
+                                                "GAMEPAD", "STEERING WHEEL", "MULTIPLAYER", "DEVELOPER"};
 std::vector<int> sections() {
     std::vector<int> v;
     for (int i = 0; i < opts::PAGES; i++)

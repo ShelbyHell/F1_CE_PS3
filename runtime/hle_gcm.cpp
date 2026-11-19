@@ -836,9 +836,13 @@ void rsx_thread() {
         if (((cmd & 0xE0000003) == 0x20000000 || (cmd & 3) || cmd == 0x00020000) && logged < 64) {
             logged++;
             u32 tgt = (cmd & 0xE0000003) == 0x20000000 ? (cmd & 0x1FFFFFFC) : (cmd & 0xFFFFFFFC);
+            // (the target may be unmapped yet: waited for below)
+            auto word = [](u32 io) {
+                const u32 p = g.io_map[(io >> 20) & 4095];
+                return p == 0xFFFFFFFF ? 0u : ld32(p + (io & 0xFFFFF));
+            };
             LOG_I("RSX flow @%08x: %08x (put=%08x) target words: %08x %08x %08x %08x", get, cmd, ld32(g.control_addr),
-                  ld32(g.io_map[0] + tgt), ld32(g.io_map[0] + tgt + 4), ld32(g.io_map[0] + tgt + 8),
-                  ld32(g.io_map[0] + tgt + 12));
+                  word(tgt), word(tgt + 4), word(tgt + 8), word(tgt + 12));
         }
         // a jump/call to an unmapped offset is a stale word of a command list the game is still writing (lists
         // reached by CALL are not bounded by PUT; seen after long render-thread stalls): wait for it to be written

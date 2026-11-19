@@ -17,8 +17,9 @@ using u16 = uint16_t;
 using u32 = uint32_t;
 using u64 = uint64_t;
 
-// the executable this build was translated from (USRDIR/EBOOT.BIN of BCES00005, 01.00)
-constexpr u64 EXPECTED_HASH = 0x4503745b63b99d73ull;
+// the executables this build was translated from (USRDIR/EBOOT.BIN and the multiplayer USRDIR/ONLINE.BIN of
+// BCES00005, 01.00)
+constexpr u64 EXPECTED_HASH = 0x4503745b63b99d73ull, ONLINE_HASH = 0x3e651d039bca2e80ull;
 
 // APP keys, revision 0x0001 (public since 2011; RPCS3's key_vault.cpp)
 constexpr u8 APP1_ERK[32] = {0x79, 0x48, 0x18, 0x39, 0xC4, 0x06, 0xA6, 0x32, 0xBD, 0xB4, 0xAC, 0x09, 0x3D, 0x73, 0xD9, 0x9A,
@@ -372,9 +373,11 @@ uint64_t image_hash(const std::vector<u8>& elf) {
     return h ? h : 1;
 }
 
-std::string load(const std::filesystem::path& game, std::vector<u8>& elf) {
+std::string load(const std::filesystem::path& game, std::vector<u8>& elf, const char* stem) {
     namespace fs = std::filesystem;
-    const fs::path bin = game / "USRDIR" / "EBOOT.BIN", plain = game / "USRDIR" / "EBOOT.elf";
+    const std::string name = stem;
+    const u64 want = name == "ONLINE" ? ONLINE_HASH : EXPECTED_HASH;
+    const fs::path bin = game / "USRDIR" / (name + ".BIN"), plain = game / "USRDIR" / (name + ".elf");
     const char* other = "is not the executable this build was made from (F1 Championship Edition BCES00005, "
                         "version 01.00, from the disc): another version or region, a game update or a damaged copy.";
     std::error_code ec;
@@ -384,24 +387,24 @@ std::string load(const std::filesystem::path& game, std::vector<u8>& elf) {
         if (self.size() >= 4 && !memcmp(self.data(), "\x7f" "ELF", 4)) elf.swap(self);   // (already decrypted)
         else bin_problem = decrypt_self(self, elf);
         if (bin_problem.empty()) {
-            if (image_hash(elf) == EXPECTED_HASH) return {};
+            if (image_hash(elf) == want) return {};
             bin_problem = other;
         }
-        bin_problem = "USRDIR/EBOOT.BIN " + bin_problem;
+        bin_problem = "USRDIR/" + name + ".BIN " + bin_problem;
     }
     // a missing or unusable EBOOT.BIN: an EBOOT.elf decrypted elsewhere, if it is the right one
     if (fs::is_regular_file(plain, ec)) {
         elf = read_file(plain);
         const u64 h = image_hash(elf);
-        if (h == EXPECTED_HASH) return {};
+        if (h == want) return {};
         if (bin_problem.empty()) {
             elf.clear();
-            return std::string("USRDIR/EBOOT.elf ") + (h ? other : "is not a decrypted PPU executable.") +
-                   " Put the disc's original USRDIR/EBOOT.BIN in the folder instead.";
+            return "USRDIR/" + name + ".elf " + (h ? other : "is not a decrypted PPU executable.") +
+                   " Put the disc's original USRDIR/" + name + ".BIN in the folder instead.";
         }
     }
     elf.clear();
-    return bin_problem.empty() ? "USRDIR/EBOOT.BIN was not found in this PS3_GAME folder." : bin_problem;
+    return bin_problem.empty() ? "USRDIR/" + name + ".BIN was not found in this PS3_GAME folder." : bin_problem;
 }
 
 }  // namespace eboot

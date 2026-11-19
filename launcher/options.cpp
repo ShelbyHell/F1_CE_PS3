@@ -15,6 +15,7 @@
 #include <dxgi1_6.h>
 #else
 #include <spawn.h>
+#include <sys/prctl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 extern char** environ;
@@ -70,6 +71,11 @@ Option toggle(Page p, const char* label, const char* key, const char* help, cons
 Option text(Page p, const char* key, const char* help) {
     Option o{p, TEXT, key, key};
     o.help = help;
+    return o;
+}
+Option text(Page p, const char* label, const char* key, const char* help) {   // with a label of its own
+    Option o = text(p, key, help);
+    o.label = label;
     return o;
 }
 Option header(Page p, const char* title) { return Option{p, HEADER, title, ""}; }
@@ -255,6 +261,25 @@ std::vector<Option> make_options() {
                        {{"Game menu", nullptr}, {"Off", "0"}, {"On", "1"}}, 0, qr));
     v.push_back(choice(QUICK_RACE, "Penalties", "F1CE_QR_PENALTIES", {{"Game menu", nullptr}, {"Off", "0"}, {"On", "1"}},
                        0, qr));
+
+    // ---------------------------------------------------------------- Multiplayer (runtime/hle_net.cpp)
+    v.push_back(header(MULTIPLAYER, "Virtual LAN"));
+    v.push_back(choice(MULTIPLAYER, "Room", "F1CE_NET_MODE",
+                       {{"None (this PC only)", nullptr}, {"Host a room", "host"}, {"Join a room", "join"}}, 0,
+                       "In the game: Multiplayer > Play LAN. Everyone in a room plays on one virtual LAN: the host's "
+                       "game runs the room, the others join it by address. The host forwards the room's TCP port."));
+    v.push_back(greyed(text(MULTIPLAYER, "Your name", "F1CE_NET_NAME",
+                            "Shown in the room's member list (the game asks for its own LAN user name too)."),
+                       "F1CE_NET_MODE", nullptr));
+    v.push_back(greyed(text(MULTIPLAYER, "Host address", "F1CE_NET_ADDR",
+                            "Join a room: the host's IP address or name, optionally :port."),
+                       "F1CE_NET_MODE", "host"));
+    v.push_back(greyed(text(MULTIPLAYER, "Room port", "F1CE_NET_PORT",
+                            "TCP port of the room (default 51015). Host: forward it in your router."),
+                       "F1CE_NET_MODE", nullptr));
+    v.push_back(greyed(text(MULTIPLAYER, "Room password", "F1CE_NET_PASSWORD",
+                            "Optional. Host: only players giving the same password can join."),
+                       "F1CE_NET_MODE", nullptr));
 
     // ---------------------------------------------------------------- Developer Tools (README, "Debugging aids")
     v.push_back(header(DEVELOPER, "Logging and profiling"));
@@ -699,15 +724,45 @@ std::string start_game(Ini& ini, std::function<void(unsigned)> exited) {
     STARTUPINFOW si{};
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
-    if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, W(g_data_dir).c_str(),
-                        &si, &pi))
+    // The game may hand over to its other executable (Multiplayer: f1ce starts f1ce_online and exits, and back), so
+    // it runs in a job: it has ended when the job's last process has, with that process's exit code.
+    HANDLE job = CreateJobObjectW(nullptr, nullptr);
+    HANDLE port = CreateIoCompletionPort(INVALID_HANDLE_VALUE, nullptr, 0, 1);
+    JOBOBJECT_ASSOCIATE_COMPLETION_PORT acp{job, port};
+    const bool in_job = job && port && SetInformationJobObject(job, JobObjectAssociateCompletionPortInformation, &acp, sizeof(acp));
+    if (!CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr,
+                        W(g_data_dir).c_str(), &si, &pi))
         return "Could not start " + U(exe) + " (error " + std::to_string(GetLastError()) + ").";
+    const bool tracked = in_job && AssignProcessToJobObject(job, pi.hProcess);
+    ResumeThread(pi.hThread);
     CloseHandle(pi.hThread);
-    std::thread([h = pi.hProcess, exited] {
-        WaitForSingleObject(h, INFINITE);
+    std::thread([h = pi.hProcess, pid = pi.dwProcessId, job, port, tracked, exited] {
         DWORD code = 0;
-        GetExitCodeProcess(h, &code);
+        if (!tracked) {
+            WaitForSingleObject(h, INFINITE);
+            GetExitCodeProcess(h, &code);
+        } else {
+            std::vector<std::pair<DWORD, HANDLE>> procs{{pid, h}};
+            DWORD msg;
+            ULONG_PTR key;
+            LPOVERLAPPED ov;
+            while (GetQueuedCompletionStatus(port, &msg, &key, &ov, INFINITE)) {
+                const DWORD p = (DWORD)(ULONG_PTR)ov;
+                if (msg == JOB_OBJECT_MSG_NEW_PROCESS && p != pid) {
+                    if (HANDLE c = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, p)) procs.push_back({p, c});
+                } else if (msg == JOB_OBJECT_MSG_EXIT_PROCESS || msg == JOB_OBJECT_MSG_ABNORMAL_EXIT_PROCESS) {
+                    for (auto& [q, c] : procs)
+                        if (q == p) GetExitCodeProcess(c, &code);
+                } else if (msg == JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO) {
+                    break;
+                }
+            }
+            for (auto& [q, c] : procs)
+                if (c != h) CloseHandle(c);
+        }
         CloseHandle(h);
+        if (port) CloseHandle(port);
+        if (job) CloseHandle(job);
         exited(code);
     }).detach();
 #else
@@ -718,12 +773,15 @@ std::string start_game(Ini& ini, std::function<void(unsigned)> exited) {
     for (std::string& a : argv_s) argv.push_back(a.data());
     argv.push_back(nullptr);
     if (chdir(g_data_dir.c_str()) != 0) return "Could not enter " + g_data_dir + ".";
+    // (the game may hand over to its other executable, f1ce <-> f1ce_online: as their subreaper the launcher waits
+    // for that one too, and reports the last exit)
+    prctl(PR_SET_CHILD_SUBREAPER, 1);
     pid_t pid;
     if (posix_spawn(&pid, exe.c_str(), nullptr, nullptr, argv.data(), environ) != 0) return "Could not start " + exe + ".";
-    std::thread([pid, exited] {
-        int st = 0;
-        waitpid(pid, &st, 0);
-        exited(WIFEXITED(st) ? (unsigned)WEXITSTATUS(st) : 0x80000000u | (unsigned)WTERMSIG(st));
+    std::thread([exited] {
+        int st = 0, last = 0;
+        while (waitpid(-1, &st, 0) > 0) last = st;
+        exited(WIFEXITED(last) ? (unsigned)WEXITSTATUS(last) : 0x80000000u | (unsigned)WTERMSIG(last));
     }).detach();
 #endif
     return {};

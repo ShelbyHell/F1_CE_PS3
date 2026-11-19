@@ -1,4 +1,4 @@
-// Loads the game's executable segments (EBOOT.BIN, decrypted by self_decrypt.cpp) into guest memory at runtime
+// Loads the game's executable segments (EBOOT.BIN, or ONLINE.BIN in f1ce_online; decrypted by self_decrypt.cpp) into guest memory at runtime
 // and starts the main PPU thread. The recompiled code never embeds game data; it is read from the user's copy.
 #include "host.h"
 #include "kernel.h"
@@ -12,6 +12,9 @@
 #define NOMINMAX
 #include <windows.h>
 #include <shellapi.h>
+#else
+#include <spawn.h>
+extern char** environ;
 #endif
 
 u32 g_tls_addr = 0, g_tls_filesz = 0, g_tls_memsz = 0;
@@ -80,7 +83,7 @@ LoadedProcess load_elf(const std::vector<u8>& d) {
         }
     }
     LOG_I("TLS image %08x filesz=%x memsz=%x", g_tls_addr, g_tls_filesz, g_tls_memsz);
-    if (getenv("F1CE_60FPS")) {
+    if (getenv("F1CE_60FPS") && !g_online_image) {
         // game ticks per frame, read by the main loop (0x2494a4) every frame; 2 on the 01.00 disc. do_flip sets it
         // from the time each frame took and the vblank thread doubles its rate for the game's frame limiter
         const u32 ticks_per_frame = 0x10044288;
@@ -91,13 +94,80 @@ LoadedProcess load_elf(const std::vector<u8>& d) {
     return p;
 }
 
+// Starts the executable `stem` (f1ce or f1ce_online) from this one's folder on `game` with the guest arguments, for
+// sys_game_process_exitspawn. A suffix of this executable's name (f1ce_pgo.exe -> f1ce_online_pgo.exe) is kept when
+// such a file exists.
+bool spawn_sibling(const char* stem, const std::string& game, const std::vector<std::string>& guest_args) {
+    namespace fs = std::filesystem;
+#ifdef _WIN32
+    wchar_t self[32768];
+    const DWORD n = GetModuleFileNameW(nullptr, self, 32768);
+    if (!n || n >= 32768) return false;
+    const fs::path me(self);
+    const std::wstring ext = me.extension().wstring();
+#else
+    std::error_code ec;
+    const fs::path me = fs::read_symlink("/proc/self/exe", ec);
+    if (ec) return false;
+    const std::string ext;
+#endif
+    const std::string mine = PATH_STR(me.stem());
+    const std::string base = g_online_image ? "f1ce_online" : "f1ce";
+    fs::path exe = me.parent_path() / fs::u8path(std::string(stem));
+    exe += ext;
+    if (mine.size() > base.size() && mine.compare(0, base.size(), base) == 0) {   // keep a suffix
+        fs::path alt = me.parent_path() / fs::u8path(std::string(stem) + mine.substr(base.size()));
+        alt += ext;
+        if (fs::exists(alt)) exe = alt;
+    }
+    std::vector<std::string> argv{PATH_STR(exe), game};
+    for (const std::string& a : guest_args) argv.insert(argv.end(), {"--guest-arg", a});
+    LOG_I("starting %s", argv[0].c_str());
+    std::fflush(nullptr);
+#ifdef _WIN32
+    // CommandLineToArgvW quoting: backslashes double only before a quote
+    std::wstring cmd;
+    for (const std::string& a : argv) {
+        const std::wstring w = fs::u8path(a).wstring();
+        if (!cmd.empty()) cmd += L' ';
+        cmd += L'"';
+        size_t bs = 0;
+        for (wchar_t ch : w) {
+            if (ch == L'\\') { bs++; continue; }
+            cmd.append(ch == L'"' ? 2 * bs + 1 : bs, L'\\');
+            bs = 0;
+            cmd += ch;
+        }
+        cmd.append(2 * bs, L'\\');
+        cmd += L'"';
+    }
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    // (no console window of its own when this one has none: started by the launcher)
+    const DWORD flags = GetConsoleWindow() ? 0 : CREATE_NO_WINDOW;
+    if (!CreateProcessW(exe.wstring().c_str(), cmd.data(), nullptr, nullptr, FALSE, flags, nullptr, nullptr, &si, &pi)) return false;
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return true;
+#else
+    std::vector<char*> cargv;
+    for (std::string& a : argv) cargv.push_back(a.data());
+    cargv.push_back(nullptr);
+    pid_t pid;
+    return posix_spawn(&pid, argv[0].c_str(), nullptr, nullptr, cargv.data(), environ) == 0;
+#endif
+}
+
 void limit_cpus();   // core.cpp
 
 int main(int argc, char** argv) {
     namespace fs = std::filesystem;
     limit_cpus();
-    // Usage: f1ce [path/to/PS3_GAME] [--trace]
+    // Usage: f1ce [path/to/PS3_GAME] [--trace] [--guest-arg <argument>]...   or: f1ce_online --room (F1CE_NET_PORT)
+    // (--guest-arg: the game's own arguments, passed by sys_game_process_exitspawn between f1ce and f1ce_online)
     std::string game = "PS3_GAME";
+    std::vector<std::string> guest_args;
     std::vector<std::string> args(argv, argv + argc);
 #ifdef _WIN32
     // argv is in the ANSI code page, which mangles accented folder names (C:\Users\José\...): take the UTF-16
@@ -110,14 +180,19 @@ int main(int argc, char** argv) {
 #endif
     for (int i = 1; i < argc; i++) {
         const std::string& a = args[i];
+        if (a == "--room") {   // a multiplayer room alone, no game (hle_net.cpp)
+            [[noreturn]] void net_room_main();
+            net_room_main();
+        }
         if (a == "--trace") g_log_trace = true;
+        else if (a == "--guest-arg" && i + 1 < argc) guest_args.push_back(args[++i]);
         else game = a;
     }
     if (!fs::exists(fs::u8path(game) / "USRDIR"))
         fatal("PS3_GAME folder not found at '%s'. Pass it as first argument.", game.c_str());
     // the disc's EBOOT.BIN, decrypted here (or a checked EBOOT.elf)
     std::vector<u8> elf;
-    if (const std::string e = eboot::load(fs::u8path(game), elf); !e.empty())
+    if (const std::string e = eboot::load(fs::u8path(game), elf, g_online_image ? "ONLINE" : "EBOOT"); !e.empty())
         fatal("%s\n\nGame folder: %s", e.c_str(), game.c_str());
     g_game_dir = PATH_STR(fs::absolute(fs::u8path(game)));
     g_data_dir = PATH_STR(fs::current_path() / "ps3_data");
@@ -136,7 +211,8 @@ int main(int argc, char** argv) {
     if (getenv("F1CE_SPU_BENCH")) { extern void spu_bench(); spu_bench(); exit(0); }
     LoadedProcess p = load_elf(elf);
     std::vector<u8>().swap(elf);
-    run_main_thread(p.entry_opd, p.stack_size, p.prio);
+    for (const std::string& a : guest_args) LOG_I("guest argument: %s", a.c_str());
+    run_main_thread(p.entry_opd, p.stack_size, p.prio, guest_args);
     LOG_I("main thread returned");
     return 0;
 }

@@ -6,6 +6,8 @@ the runtime overrides (runtime/mods.cpp). The original game files are only read.
   python -I tools/season_pack.py build <USRDIR> <MODS/pack | PLAYER_HELMETS/pack>
   python -I tools/season_pack.py tyremaker <MODS/pack> <name> [--like Bridgestone|Michelin]
   python -I tools/season_pack.py wheelmodels <USRDIR> <MODS/pack>    adds WHEELS/model to a pack made without --models
+  python -I tools/season_pack.py steering <USRDIR> <MODS/pack> [--models]   adds STEERING/ to an older pack (or
+                                                                            its models)
 
 template writes (folders named by the database ids: CARS/Honda, DRIVERS/jbutton, ...)
   pack.ini                          name and description shown by the launcher / Content Manager
@@ -51,6 +53,11 @@ template writes (folders named by the database ids: CARS/Honda, DRIVERS/jbutton,
   WHEELS/model/Wheels.obj, .glb     with --models: the tyres and rims every car uses (lod0-2, punctured rims not
                                     exported), using the WHEELS/ PNGs; build imports edited ones like the cars'
   WHEELS/model/Wheels_Garage.*      the garage / menu car's wheels (stream.wad wheels_fe.sg), edited separately
+  STEERING/<team>/*.png             the steering wheel's textures (Generic: the far / low detail drivers' wheel)
+  STEERING/<team>/model/*.obj, .glb with --models: the steering wheel (and McLaren / WilliamsFW18 the dash) model;
+                                    its display mesh shows the live display through its UVs on the 256x256 layout
+                                    of the exported swdisplay.png (shift lights in the top 32 rows)
+  STEERING/LCDDisplaySource.png     the live display's digits and symbols (white on transparent)
   CREW/<team>/*.png                 pit crew overalls and textures
   COUNTRIES/<country>/*.png         flag, driver select picture (used for custom drivers)
   UI/<path>.png                     the other menu, HUD and TV overlay images whose paths are known
@@ -76,6 +83,7 @@ same name used as it is, i.e. upside down; any size, encoded in the original's f
   <folder>/<archive>.wad/<path>                           stand-alone textures, in every archive that has a copy
                                                           (and the custom tyre makers' new sidewall textures)
   WHEELS/model/<archive>.wad/models/wheels/...            edited wheel models
+  STEERING/<team>/offline.wad/Animations/Driver/...       steering wheels / dashes (edited textures or model)
                                                           (PlayerNN/offline.wad/... in a helmet pack)
   DATABASE/offline.wad/entities.bin                       (the game reads offline.wad's copy, not update.wad's)
   DATABASE/offline.wad/dynamics.bin                       (likewise)
@@ -128,6 +136,26 @@ WHEEL_TEXTURE_ALIASES = {'wheels_tyrewall_bs_blur0': 'default_sidewall_bs_blur0'
                          'default_tyretred_dry_s': 'default_tyretred_dry_blur0_s',
                          'default_tyretred_dry_n': 'default_tyretred_dry_blur0_n',
                          'wheels_tyretred_dry_n': 'default_tyretred_dry_blur0_n'}
+# steering wheels: STEERING/<team>/ <- (archive, wad path, model file stem). A 2006 driver holds
+# Animations/Driver/Body/<car field14>SteeringWheel.sg (the far / low detail drivers the generic one), a classic one
+# <car field55>SteeringWheel.sg; car field60 names a dash model (+ .sg) hung on the car model's dash / dashboard node.
+# The display mesh's texture Textures/SWDisplay.gtf is replaced in game by the live display (gear, speed, revs, shift
+# lights) drawn each frame from Animations/Driver/LCDDisplaySource.gtf: its UVs place the display, the picture
+# itself is only a layout guide (not editable).
+_BODY = 'Animations/Driver/Body/'
+STEERING_MODELS = {team: [('offline.wad', f'{_BODY}{f}SteeringWheel.sg', f'{team}_SteeringWheel')] for team, f in
+                   [('Renault', 'renault'), ('McLaren', 'McLaren'), ('Ferrari', 'Ferrari'), ('Toyota', 'toyota'),
+                    ('Williams', 'Williams'), ('Honda', 'Honda'), ('RedBull', 'RedBull'), ('BMW', 'Bmw'),
+                    ('Midland', 'midland'), ('ToroRosso', 'ToroRosso'), ('SuperAguri', 'SuperAguri'),
+                    ('Generic', 'Generic')]}
+STEERING_MODELS['McLaren'].append(('offline.wad', f'{_BODY}McLarenDash.sg', 'McLaren_Dash'))
+STEERING_MODELS.update({team: [('offline.wad', f'Animations/Driver/Classics/{f}/SteeringWheel.sg', f'{team}_SteeringWheel')]
+                        for team, f in [('Lotus72e', 'Lotus72e'), ('CooperClimax', 'CooperClimax'),
+                                        ('RenaultRS01', 'RenaultRS01'), ('HondaRA272', 'HondaRA272'),
+                                        ('Lotus49c', 'Lotus49c'), ('WilliamsFW18', 'WilliamsFW18'),
+                                        ('WilliamsFW06', 'WilliamsFW06'), ('Alfa158', 'AlfaRomeo158')]})
+STEERING_MODELS['WilliamsFW18'].append(('offline.wad', f'{_BODY}WilliamsFw18Dash.sg', 'WilliamsFW18_Dash'))
+SW_DISPLAY = 'swdisplay'
 POINTS_TXT = '''# Points of 1st, 2nd, 3rd ... (up to 22 places; places not listed score nothing). The game reads this file
 # itself when the season pack is selected; the original system is 10 8 6 5 4 3 2 1. Example (2010): 25 18 15 12 10 8 6 4 2 1
 10 8 6 5 4 3 2 1
@@ -219,6 +247,10 @@ def untracked_models(pack, manifest):
     for archive, path, stem, _ in WHEEL_MODELS:
         for ext in ('.glb', '.obj'):
             out[f'{stem}{ext}'] = [archive, path]
+    for team, models in STEERING_MODELS.items():
+        for archive, path, stem in models:
+            for ext in ('.glb', '.obj'):
+                out[f'STEERING/{team}/model/{stem}{ext}'] = [archive, path]
     known = manifest.get('models', {})
     return {rel: t for rel, t in out.items() if rel not in known and (pack / rel).exists()}
 
@@ -479,6 +511,8 @@ def standalone_sources(game, ents):
         rel = None
         if lo.startswith('models/textureswaps/wheels/'):
             rel = 'WHEELS/' + '/'.join(orig[3:])
+        elif lo == 'animations/driver/lcddisplaysource.gtf':
+            rel = 'STEERING/LCDDisplaySource'
         elif parts[0] == 'drivers' and len(parts) > 2 and parts[1] in drivers:
             rel = f'DRIVERS/{drivers[parts[1]]}/' + '/'.join(orig[2:])
         elif parts[0] == 'teams' and len(parts) > 3 and parts[2] == 'pitcrew' and parts[1] in teams:
@@ -573,6 +607,12 @@ def cmd_template(usrdir, pack, models):
             gltf_jobs.append(((archive, path), rel[:-4] + '.glb', None, None))
         log('Tyres: exporting the wheel models')
         gltf_jobs += wheel_model_jobs(game, pack, models_written)
+        log('Steering wheels: exporting the models')
+        gltf_jobs += steering_model_jobs(game, pack, models_written)
+    found = steering_sources(game)
+    for rel, targets in found.items():
+        sources.setdefault(rel, []).extend(targets)
+    log(f'{len(found)} steering wheel textures')
     manifest = {'files': {}, 'built': [], 'teams': team_roles, 'specular_maps': True}
     write_images(pack, sources, game, manifest)
     if gltf_jobs:
@@ -653,6 +693,72 @@ def wheel_model_jobs(game, pack, models_written):
         models_written[f'{stem}.obj'] = [archive, path]
         jobs.append(((archive, path), f'{stem}.glb', only, functools.partial(wheel_texture_png, pack)))
     return jobs
+
+
+def steering_sources(game):
+    """Textures embedded in the steering wheel and dash models (not the display layout, which the game replaces):
+    {pack path: [(archive, wad path, texture key)]}."""
+    out = {}
+    for team, models in STEERING_MODELS.items():
+        for archive, path, _ in models:
+            s = game.scene(archive, path)
+            for t in s.textures if s else []:
+                stem = tex_stem(t.path)
+                if t.gtf is None or t.gtf.cube or stem == SW_DISPLAY:
+                    continue
+                out.setdefault(f'STEERING/{team}/{stem}.png', []).append((archive, path, stem))
+    return out
+
+
+def steering_model_jobs(game, pack, models_written):
+    """Writes the steering wheel / dash model OBJs and returns their glTF jobs (to run once the STEERING PNGs
+    exist; the display layout is written next to the glTF as its own PNG)."""
+    jobs = []
+    for team, models in STEERING_MODELS.items():
+        for archive, path, stem in models:
+            if game.scene(archive, path) is None:
+                continue
+            rel = f'STEERING/{team}/model/{stem}'
+            (pack / rel).parent.mkdir(parents=True, exist_ok=True)
+            sg.cmd_obj(game.scene(archive, path), pack / f'{rel}.obj')
+            models_written[f'{rel}.obj'] = [archive, path]
+            jobs.append(((archive, path), f'{rel}.glb', None, functools.partial(steering_texture_png, pack / 'STEERING' / team)))
+    return jobs
+
+
+def steering_texture_png(folder, t):
+    f = folder / f'{tex_stem(t.path)}.png'
+    return f if f.exists() else None
+
+
+def cmd_steering(usrdir, pack, models):
+    """Adds STEERING/ (textures, and with models the 3D models) to a season pack made before it; files already in
+    the pack are kept."""
+    game = Game(usrdir)
+    pack = Path(pack)
+    manifest = json.loads((pack / 'template.json').read_text())
+    if 'teams' not in manifest:
+        raise SystemExit(f'{pack}: not a season pack')
+    sources = {rel: t for rel, t in steering_sources(game).items() if rel not in manifest['files']}
+    sources.update({rel: t for rel, t in standalone_sources(game, json.loads(
+        (pack / 'DATABASE' / 'entities.json').read_text(encoding='utf-8'))).items()
+        if rel.startswith('STEERING/') and rel not in manifest['files']})
+    if sources:
+        write_images(pack, sources, game, manifest)
+        log(f'{len(sources)} steering wheel textures added')
+    known = manifest.setdefault('models', {})
+    if models:
+        if any(rel.startswith('STEERING/') for rel in known):
+            log('the steering wheel models are in the pack already')
+        else:
+            written = {}
+            for (archive, path), rel, only, texture_file in steering_model_jobs(game, pack, written):
+                sg.cmd_gltf(game.scene(archive, path), pack / rel, only, texture_file=texture_file)
+                written[rel] = [archive, path]
+            for rel, t in written.items():
+                known[rel] = {'sha1': sha1(pack / rel), 'target': t}
+            log(f'{len(written)} steering wheel model files written')
+    (pack / 'template.json').write_text(json.dumps(manifest, indent=1), newline='\n')
 
 
 def cmd_wheelmodels(usrdir, pack):
@@ -845,6 +951,8 @@ def main(argv):
         cmd_build(argv[1], argv[2])
     elif argv[0] == 'wheelmodels':
         cmd_wheelmodels(argv[1], argv[2])
+    elif argv[0] == 'steering':
+        cmd_steering(argv[1], argv[2], '--models' in argv[3:])
     elif argv[0] == 'tyremaker':
         like = argv[argv.index('--like') + 1] if '--like' in argv else 'Bridgestone'
         for f in new_tyre_maker(argv[1], argv[2], like):

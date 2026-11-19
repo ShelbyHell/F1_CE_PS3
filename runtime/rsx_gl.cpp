@@ -3103,7 +3103,7 @@ void flip(u32 ea, u32 pitch, u32 width, u32 height) {
                     int hits = 0;
                     // the committed guest ranges (core.cpp mem::init): ELF + main memory, HLE heap, user memory, RSX
                     // local memory, stacks; read through host pointers (the values are big-endian)
-                    const u32 ranges[][2] = {{0x10000, 0x11000000}, {mem::MAIN_HEAP, mem::MAIN_HEAP + mem::MAIN_HEAP_SIZE},
+                    const u32 ranges[][2] = {{0x10000, 0x12000000}, {mem::MAIN_HEAP, mem::MAIN_HEAP + mem::MAIN_HEAP_SIZE},
                                              {mem::USER_BASE, mem::USER_BASE + mem::USER_SIZE},
                                              {mem::RSX_LOCAL, mem::RSX_LOCAL + mem::RSX_LOCAL_SIZE}};
                     for (auto& r : ranges) {

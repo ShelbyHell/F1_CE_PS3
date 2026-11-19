@@ -75,6 +75,7 @@ set(RUNTIME_SOURCES
   runtime/hle_rumble.cpp
   runtime/hle_aidrive.cpp
   runtime/hle_usbd.cpp
+  runtime/hle_net.cpp
   runtime/hle_camera.cpp
   runtime/hle_gcm.cpp
   runtime/hle_spurs.cpp
@@ -151,28 +152,62 @@ add_library(spu_aot OBJECT ${SPU_AOT_SOURCES})
 target_include_directories(spu_aot PRIVATE runtime generated)
 target_compile_options(spu_aot PRIVATE ${ARCH_FLAGS} -O2 -fno-strict-aliasing -fwrapv -Wno-unused-function)
 
-add_executable(f1ce ${RUNTIME_SOURCES} $<TARGET_OBJECTS:ppu_generated> $<TARGET_OBJECTS:spu_aot>)
-target_include_directories(f1ce PRIVATE runtime generated)
-target_compile_options(f1ce PRIVATE ${ARCH_FLAGS} -fno-strict-aliasing -fwrapv)
+# The runtime is shared by the game (f1ce: EBOOT.BIN) and the multiplayer executable the game exitspawns into
+# (f1ce_online: ONLINE.BIN, translated by 'tools/recomp.py online' into generated_online; built when that exists).
+add_library(f1ce_runtime OBJECT ${RUNTIME_SOURCES})
+target_include_directories(f1ce_runtime PRIVATE runtime generated)
+target_compile_options(f1ce_runtime PRIVATE ${ARCH_FLAGS} -fno-strict-aliasing -fwrapv)
 if(F1CE_PGO STREQUAL "USE")   # a new profile recompiles the game's own sources
   set_property(SOURCE ${RUNTIME_SOURCES} ${GENERATED_SOURCES} ${SPU_AOT_SOURCES} APPEND PROPERTY OBJECT_DEPENDS
     ${F1CE_PGO_PROFILE})
 endif()
-
 if(F1CE_HOST STREQUAL "SDL")
-  target_link_libraries(f1ce PRIVATE SDL3::SDL3-static)
-  target_include_directories(f1ce PRIVATE ${OVERLAY_GEN} ${OVERLAY_IMGUI})
+  target_link_libraries(f1ce_runtime PRIVATE SDL3::SDL3-static)
+  target_include_directories(f1ce_runtime PRIVATE ${OVERLAY_GEN} ${OVERLAY_IMGUI})
   if(F1CE_VULKAN)
-    target_compile_definitions(f1ce PRIVATE F1CE_VULKAN)
-    target_link_libraries(f1ce PRIVATE glslang::glslang glslang::SPIRV glslang::glslang-default-resource-limits)
-    target_include_directories(f1ce PRIVATE third_party/SDL3-3.4.18/src/video/khronos)   # Vulkan headers
-  endif()
-  if(WIN32)
-    target_link_libraries(f1ce PRIVATE opengl32 winmm synchronization shell32 psapi dxgi)
+    target_compile_definitions(f1ce_runtime PRIVATE F1CE_VULKAN)
+    target_link_libraries(f1ce_runtime PRIVATE glslang::glslang glslang::SPIRV glslang::glslang-default-resource-limits)
+    target_include_directories(f1ce_runtime PRIVATE third_party/SDL3-3.4.18/src/video/khronos)   # Vulkan headers
   endif()
 endif()
+
+file(GLOB ONLINE_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/generated_online/ppu_*.cpp)
+if(ONLINE_SOURCES)
+  add_library(ppu_generated_online OBJECT ${ONLINE_SOURCES})
+  target_include_directories(ppu_generated_online PRIVATE runtime generated_online)
+  target_compile_options(ppu_generated_online PRIVATE ${ARCH_FLAGS} -O2 -fno-strict-aliasing -Wno-unused-label
+    -Wno-unused-variable -Wno-parentheses-equality -fwrapv)
+endif()
+
+function(f1ce_game target generated)
+  add_executable(${target} $<TARGET_OBJECTS:f1ce_runtime> $<TARGET_OBJECTS:${generated}> $<TARGET_OBJECTS:spu_aot>)
+  if(F1CE_HOST STREQUAL "SDL")
+    target_link_libraries(${target} PRIVATE SDL3::SDL3-static)
+    if(F1CE_VULKAN)
+      target_link_libraries(${target} PRIVATE glslang::glslang glslang::SPIRV glslang::glslang-default-resource-limits)
+    endif()
+    if(WIN32)
+      target_link_libraries(${target} PRIVATE opengl32 winmm synchronization shell32 psapi dxgi ws2_32)
+    endif()
+  endif()
+  if(WIN32)
+    target_link_options(${target} PRIVATE -static -Wl,--stack,8388608 -Wl,-Map=${target}.map)
+  else()
+    find_package(Threads REQUIRED)
+    target_link_libraries(${target} PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+    # native builds (linux/build.sh): libstdc++/libgcc linked in, so the AppImage needs only the build machine's glibc
+    # or newer (the zig cross build links libc++ statically and targets glibc 2.28)
+    if(NOT CMAKE_CROSSCOMPILING)
+      target_link_options(${target} PRIVATE -static-libstdc++ -static-libgcc)
+    endif()
+  endif()
+endfunction()
+f1ce_game(f1ce ppu_generated)
+if(ONLINE_SOURCES)
+  f1ce_game(f1ce_online ppu_generated_online)
+endif()
+
 if(WIN32)
-  target_link_options(f1ce PRIVATE -static -Wl,--stack,8388608 -Wl,-Map=f1ce.map)
   enable_language(RC)
   # the resource compiler's include is not tracked: rebuild the version resource when version.h changes
   set_source_files_properties(launcher/f1ce_launcher.rc PROPERTIES OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/launcher/version.h)
@@ -225,14 +260,5 @@ if(F1CE_HOST STREQUAL "SDL")
   else()
     find_package(Threads REQUIRED)
     target_link_libraries(f1ce_launcher_new PRIVATE Threads::Threads)
-  endif()
-endif()
-if(NOT WIN32)
-  find_package(Threads REQUIRED)
-  target_link_libraries(f1ce PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
-  # native builds (linux/build.sh): libstdc++/libgcc linked in, so the AppImage needs only the build machine's glibc
-  # or newer (the zig cross build links libc++ statically and targets glibc 2.28)
-  if(NOT CMAKE_CROSSCOMPILING)
-    target_link_options(f1ce PRIVATE -static-libstdc++ -static-libgcc)
   endif()
 endif()

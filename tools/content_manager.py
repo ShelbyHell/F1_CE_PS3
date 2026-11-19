@@ -246,6 +246,7 @@ class App(tk.Tk):
         self.nb.pack(fill='both', expand=True)
         self._teams_tab()
         self._rims_tab()
+        self._steering_tab()
         self._drivers_tab()
         self._points_tab()
         self._helmets_tab()
@@ -312,6 +313,71 @@ class App(tk.Tk):
             slot.grid(row=i // 3, column=i % 3, sticky='nsew', padx=4, pady=2)
         for c in range(3):
             imgs.columnconfigure(c, weight=1)
+
+    def _steering_tab(self):
+        self.steering_tab, self.steer_list, d = self._list_and_detail('Steering wheels')
+        self.steer_list.bind('<<ListboxSelect>>', lambda e: self.show_steering())
+        ttk.Label(d, wraplength=900, justify='left', foreground='#555',
+                  text='The steering wheel each driver holds in the cockpit (Generic: the far / low detail drivers; '
+                       'McLaren and the Williams FW18 show their display on a separate dash model). The display is '
+                       'drawn live by the game: the digits and symbols come from "Display digits" (shared by every '
+                       'car; keep them white, the game colours them), and the display mesh of the 3D model places '
+                       'them through its UVs on the layout guide.').pack(anchor='w')
+        row = ttk.Frame(d)
+        row.pack(fill='x', pady=(6, 0))
+        ttk.Button(row, text='Open folder', command=lambda: self.open_steering('')).pack(side='left')
+        ttk.Button(row, text='Open 3D model folder', command=lambda: self.open_steering('model')).pack(side='left',
+                                                                                                    padx=6)
+        self.steer_grid = ttk.Frame(d)
+        self.steer_grid.pack(fill='both', expand=True, pady=4)
+        self.steer_slots = []
+
+    def steering_teams(self):
+        return [t for t in season_pack.STEERING_MODELS if (self.pack / 'STEERING' / t).is_dir()] if self.pack else []
+
+    def show_steering(self):
+        for w in self.steer_grid.winfo_children():
+            w.destroy()
+        teams = self.steering_teams()
+        if not teams:
+            ttk.Label(self.steer_grid, text='This pack was made before the steering wheels: use "Open folder" to '
+                                            'add them.').grid(sticky='w')
+            return
+        s = self.steer_list.curselection()
+        team = teams[s[0]] if s and s[0] < len(teams) else teams[0]
+        folder = self.pack / 'STEERING' / team
+        order = lambda p: ({'c': 0, 'ca': 0, 's': 1, 'n': 2}.get(p.stem.lower().rsplit('_', 1)[-1], 3), p.name)  # noqa
+        pics = [(p.stem, p, '') for p in sorted(folder.glob('*.png'), key=order) if not p.stem.endswith('_reflection')]
+        pics.append(('Display digits (all cars)', self.pack / 'STEERING' / 'LCDDisplaySource.png',
+                     'white shapes: the game colours each part'))
+        guide = next(iter(sorted((folder / 'model').glob('*_textures/Textures/SWDisplay.png'))), None)
+        if guide:
+            pics.append(('Display layout (guide only)', guide, 'not used by the game: the display mesh UVs on it '
+                                                              'say where each part of the live display shows'))
+        for i, (title, path, note) in enumerate(pics):
+            slot = ImageSlot(self.steer_grid, self, title)
+            slot.grid(row=i // 3, column=i % 3, sticky='nsew', padx=4, pady=2)
+            slot.show(path, note)
+        for c in range(3):
+            self.steer_grid.columnconfigure(c, weight=1)
+
+    def open_steering(self, sub):
+        if not self.pack or self.kind != 'season':
+            return
+        teams = self.steering_teams()
+        if not teams:
+            if messagebox.askyesno('Content Manager', 'This pack has no steering wheels yet. Add them now (textures, '
+                                   'and the 3D models if "New packs with 3D models" is ticked)?'):
+                self.run_tool(['steering', str(self.pack)] + (['--models'] if self.models_var.get() else []),
+                              self.select_pack)
+            return
+        s = self.steer_list.curselection()
+        folder = self.pack / 'STEERING' / teams[s[0] if s else 0] / sub
+        if folder.is_dir():
+            open_path(folder)
+        elif sub == 'model' and messagebox.askyesno('Content Manager', 'This pack has no 3D steering wheel models '
+                                                    'yet. Export them now (OBJ + glTF for Blender)?'):
+            self.run_tool(['steering', str(self.pack), '--models'], self.select_pack)
 
     def _drivers_tab(self):
         self.drivers_tab, self.driver_list, d = self._list_and_detail('Drivers')
@@ -435,7 +501,7 @@ class App(tk.Tk):
         built = (self.pack / 'template.json').exists()
         self.header.configure(text=f'{self.pack.name}  ({"season pack" if kind == "season" else "helmet pack"}'
                                    f'{"" if built else ", no template: files only"})')
-        for tab in (self.teams_tab, self.rims_tab, self.drivers_tab, self.points_tab):
+        for tab in (self.teams_tab, self.rims_tab, self.steering_tab, self.drivers_tab, self.points_tab):
             self.nb.tab(tab, state='normal' if kind == 'season' else 'hidden')
         self.nb.tab(self.helmets_tab, state='normal' if kind == 'helmet' else 'hidden')
         self.nb.select(self.teams_tab if kind == 'season' else self.helmets_tab)
@@ -499,6 +565,13 @@ class App(tk.Tk):
             self.rim_list.insert('end', t.get('name') or t['id'])
         for dr in self.drivers:
             self.driver_list.insert('end', f'{dr.get("car_number", "")}  {dr.get("display_name") or dr["id"]}')
+        self.steer_list.delete(0, 'end')
+        names = {t['id']: t.get('name') or t['id'] for t in self.teams}
+        for t in self.steering_teams():
+            self.steer_list.insert('end', names.get(t, t))
+        if self.steering_teams():
+            self.steer_list.selection_set(0)
+        self.show_steering()
         pts = self.pack / 'DATABASE' / 'points.txt'
         self.points_var.set(' '.join(x for line in (pts.read_text(encoding='utf-8').splitlines() if pts.exists()
                                                       else []) for x in line.split('#')[0].split()))

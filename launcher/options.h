@@ -9,7 +9,7 @@
 class Ini;
 
 namespace opts {
-enum Page { GENERAL, VIDEO, QUICK_RACE, KEYBOARD, GAMEPAD, WHEEL, DEVELOPER, PAGES };
+enum Page { GENERAL, VIDEO, QUICK_RACE, KEYBOARD, GAMEPAD, WHEEL, MULTIPLAYER, DEVELOPER, PAGES };
 enum Kind { CHOICE, TOGGLE, TEXT, HEADER };   // HEADER: a group title in a page's list
 
 struct Choice { std::string label; const char* value; };   // value nullptr: the variable stays unset

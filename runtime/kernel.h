@@ -14,6 +14,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 // Held only around 128-byte copies, about 1.5 million times per second: much cheaper than a mutex. It yields after a
 // while because the holder may be preempted when threads outnumber cores.
@@ -80,7 +81,7 @@ constexpr u32 STACK_SIZE = 0x10000000;
 inline bool readable(u32 addr, u32 size) {
     u64 a = addr, e = a + size;
     auto in = [&](u64 b, u64 n) { return a >= b && e <= b + n; };
-    return in(0x00010000, 0x10000000 - 0x10000) || in(0x10000000, 0x01000000) || in(MAIN_HEAP, MAIN_HEAP_SIZE) ||
+    return in(0x00010000, 0x10000000 - 0x10000) || in(0x10000000, 0x02000000) || in(MAIN_HEAP, MAIN_HEAP_SIZE) ||
            in(USER_BASE, USER_SIZE) || in(RSX_LOCAL, RSX_LOCAL_SIZE) || in(STACK_BASE, STACK_SIZE);
 }
 
@@ -125,7 +126,9 @@ PPUThread* thread_find(u32 id);
 void thread_start(PPUThread* t);
 [[noreturn]] void thread_exit(PPUContext& c, u64 status);
 [[noreturn]] void process_exit(int code);   // flushes the logs and leaves at once (no static destructors)
-void run_main_thread(u32 entry_opd, u32 stack_size, s32 prio);
+void run_main_thread(u32 entry_opd, u32 stack_size, s32 prio, const std::vector<std::string>& args);
+// loader.cpp: starts f1ce / f1ce_online (next to this executable) on the game folder, for sys_game_process_exitspawn
+bool spawn_sibling(const char* stem, const std::string& game, const std::vector<std::string>& guest_args);
 
 // Thrown to unwind a guest thread's host stack on sys_ppu_thread_exit.
 struct ThreadExit { u64 status; };

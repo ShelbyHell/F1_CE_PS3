@@ -250,6 +250,11 @@ def main():
     add(root, "f1ce-recomp.png", icon, 0o644)
     add(root, ".DirIcon", icon, 0o644)
     add(root, "usr/bin/f1ce", exe, 0o755)
+    online = os.path.join(os.path.dirname(args.exe), "f1ce_online")   # Multiplayer (ONLINE.BIN), started by f1ce
+    if os.path.isfile(online):
+        add(root, "usr/bin/f1ce_online", stripped(online) if not args.no_strip else open(online, "rb").read(), 0o755)
+    else:
+        print("warning: no", online, "(Multiplayer will not start)")
     if os.path.isfile(args.launcher):
         launcher = stripped(args.launcher) if not args.no_strip else open(args.launcher, "rb").read()
         add(root, "usr/bin/f1ce_launcher", launcher, 0o755)
