@@ -27,11 +27,11 @@ The generator writes dry tread colour, normal, and specular maps to `MODS/SLICK_
 | --- | --- |
 | `Start-Stock-Test.cmd` | Stock physics and textures, for comparison. |
 | `Start-Slick-Test.cmd` | Grip multiplier ×1.05 and wear accumulation ×1.25. |
-| `Start-2026-Test.cmd` | Grip multiplier rises by 14% up to 90 km/h, tapering to 8% at 260 km/h. Adds up to 12% to positive drive torque under throttle while in gear and without rear wheelspin; the boost fades to zero at 280 km/h. Wear accumulation stays at ×1.25. |
+| `Start-2026-Test.cmd` | Grip multiplier rises by 14% up to 90 km/h, tapering to 8% at 260 km/h. Adds up to 12% to positive drive torque under throttle while in gear, with progressive wheelspin response. The boost fades to zero at 280 km/h. Wear accumulation stays at ×1.25. |
 | `Start-2026-With-Textures.cmd` | The same 2026 preset with smooth dry tread textures. |
 | `Start-Handling-Test.cmd` | Builds on the textured 2026 preset: gentler gamepad steering as speed rises, full lock up to 90 km/h, and at most 78% stick output from 240 km/h. Adds front grip at low speed and rear grip at high speed. Wheel, keyboard and menu inputs are unchanged. |
 
-The 2026 preset is a handling approximation, not a simulation of the 2026 F1 power unit. Compare it against the stock preset, or compare the two textured presets to isolate the handling changes.
+The 2026 preset is a handling approximation, not a simulation of the 2026 F1 power unit. Rear wheelspin tapers existing extra torque over about 45 ms; it takes about 180 ms to recover full boost after regaining traction. Lifting off, leaving a forward gear or losing rear contact still removes the boost immediately. Compare against the stock preset, or compare the two textured presets to isolate the handling changes.
 
 ## Verification
 

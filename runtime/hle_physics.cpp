@@ -3,6 +3,7 @@
 // force function 0x11c150 (once per substep and car) for the car whose object holds <ea> (",all" appended: every car), 400
 // calls.
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <bit>
 #include <cstdlib>
@@ -11,6 +12,7 @@
 
 #include "kernel.h"
 #include "rsx.h"
+#include "slick_tuning.h"
 
 // Experimental single-player slick preset. Only the tyre state and realistic
 // wear mode observed in the stock dry Quick Race are eligible.
@@ -62,21 +64,36 @@ void slick_grip_probe(PPUContext& c) {
 
 void slick_drive_probe(PPUContext& c) {
     const u32 car = (u32)c.r[31];
-    if (slick_test_car(car) < 2 || !(c.f[7].d > 0.0)) return;
+    if (slick_test_car(car) < 2) return;
+    struct Slot { u32 car = 0; u64 seen = 0; slick::DriveResponse response; };
+    static thread_local std::array<Slot, 32> cars{};
+    auto it = std::find_if(cars.begin(), cars.end(), [car](const Slot& s) { return s.car == car; });
+    const u64 now = time_usec();
+    if (it == cars.end()) {
+        it = std::min_element(cars.begin(), cars.end(), [](const Slot& a, const Slot& b) { return a.seen < b.seen; });
+        *it = {car, now, {}};
+    }
+    if (now - it->seen > 500000) it->response = {};
+    it->seen = now;
     const u32 gear = ld8(car + 0x9b8);
-    if (gear == 0 || gear > 7 || (ld32(car + 0x980) & 0xc) != 0xc || (ld32(car + 0x97c) & 0xc00) != 0) return;
     const float speed = std::bit_cast<float>(ld32(car + 0x3c0)) * 3.6f;
     const float throttle = std::bit_cast<float>(ld32(car + 0x950));
-    if (!(speed >= 15.0f && speed < 280.0f && throttle > 0.45f)) return;
+    if (gear == 0 || gear > 7 || (ld32(car + 0x980) & 0xc) != 0xc || !(c.f[7].d > 0.0)
+        || !(speed >= 15.0f && speed < 280.0f && throttle > 0.45f)) {
+        it->response = {};
+        return;
+    }
     // Increase only positive engine output, before the stock clutch/gear and
     // tyre solver. Fade in after launch, and taper to zero near top speed.
     const float ramp = std::min(std::clamp((speed - 15.0f) / 45.0f, 0.0f, 1.0f),
                                 std::clamp((280.0f - speed) / 100.0f, 0.0f, 1.0f));
-    const float boost = 0.12f * ramp * std::clamp((throttle - 0.45f) / 0.55f, 0.0f, 1.0f);
+    const float ceiling = 0.12f * ramp * std::clamp((throttle - 0.45f) / 0.55f, 0.0f, 1.0f);
+    const float boost = it->response.step(ceiling, (ld32(car + 0x97c) & 0xc00) != 0);
     if (!(boost > 0.0f)) return;
     c.f[7].d = (float)c.f[7].d * (1.0f + boost);
     static std::atomic_flag logged{};
-    if (!logged.test_and_set(std::memory_order_relaxed)) LOG_I("slick test: 2026 drive active, +%.1f%% at %.0f km/h", boost * 100.0f, speed);
+    if (boost >= 0.001f && !logged.test_and_set(std::memory_order_relaxed))
+        LOG_I("slick test: progressive drive active, +%.1f%% at %.0f km/h", boost * 100.0f, speed);
 }
 
 // Debug: F1CE_PHYS_SNAP=<s>,<car hex>: <s> seconds into the first 3D scene, that car object (0x1390 bytes) and its body
