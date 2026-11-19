@@ -1,37 +1,38 @@
-# Тест физики сликов
+# Slick tyre tests
 
-Эксперимент для одиночной быстрой гонки на сухой трассе. Выбери **Fuel Use & Tyre Wear → Realistic**. Мод нацелен на сухое состояние шин, наблюдавшееся в контрольной гонке; остальные комбинации ещё не проверены.
+[Русская версия](README.ru.md) · [Physics notes](Physics-Notes.md)
 
-## Подготовка
+These experimental presets target dry tyres in single-player Quick Race. Select dry weather and set **Fuel Use & Tyre Wear → Realistic**. Other tyre and race settings have not been verified.
 
-Собери `build-win/f1ce.exe` из этого репозитория с `-DF1CE_VULKAN=ON` (см. раздел Build в [основном README](../README.md)). Сценарии используют эту сборку, если в `Slick-Test` нет отдельных локальных сборок `f1ce-slick.exe`, `f1ce-slick-2026.exe` и `f1ce-slick-handling.exe`.
+## Setup
 
-Если `PS3_GAME` находится не в корне репозитория, создай `Slick-Test/local.cmd` со своим путём:
+1. Build `build-win/f1ce.exe` with `-DF1CE_VULKAN=ON` (see [Build](../README.md#build)). The launch scripts use that build unless the corresponding local executable is present in `Slick-Test`: `f1ce-slick.exe`, `f1ce-slick-2026.exe`, or `f1ce-slick-handling.exe`.
+2. Put your `PS3_GAME` folder in the repository root, or create `Slick-Test/local.cmd` with its actual path:
 
-```bat
-set "DISC=X:\Games\Formula One Championship Edition\PS3_GAME"
-```
+   ```bat
+   set "DISC=X:\Games\Formula One Championship Edition\PS3_GAME"
+   ```
 
-Для гладких текстур установи Pillow (`python -m pip install Pillow`) и запусти из корня репозитория:
+3. For the smooth tread textures, install Pillow (`python -m pip install Pillow`) and run this from the repository root, using your own `USRDIR` path:
 
-```bat
-python Slick-Test/tools/slick_textures.py tools "X:\Games\Formula One Championship Edition\PS3_GAME\USRDIR" --build
-```
+   ```bat
+   python Slick-Test/tools/slick_textures.py tools "X:\Games\Formula One Championship Edition\PS3_GAME\USRDIR" --build
+   ```
 
-## Запуск и сравнение
+The generator writes dry tread colour, normal, and specular maps to `MODS/SLICK_TEXTURES` under `Slick-Test`, preserving all nine mip levels. It leaves sidewalls and intermediate and wet tyres unchanged. Original and modified map previews go into `Texture-Preview`. The scripts run from `Slick-Test`, using a separate save and shader cache directory; they do not change the original game archives or launcher.
 
-- `Start-Slick-Test.cmd` — экспериментальные множители: сцепление ×1,05, приращение износа ×1,25.
-- `Start-Stock-Test.cmd` — та же сборка без изменений физики, для сравнения.
-- `Start-2026-Test.cmd` — отдельная сборка: +14% к сцеплению до 90 км/ч с плавным спадом до +8% к 260 км/ч. При активном газе, на передаче и без пробуксовки задних колёс добавляет до 12% к положительной тяге; помощь сходит на нет к 280 км/ч. Износ остаётся ×1,25. Это приближение по ощущениям, не модель силовой установки F1 2026.
-- `Start-2026-With-Textures.cmd` — тот же пресет «2026», плюс гладкий сухой протектор. `Start-2026-Test.cmd` оставляет оригинальные текстуры для сравнения.
-- `Start-Handling-Test.cmd` — отдельный пресет под геймпад поверх «2026» и гладких текстур: мягче мелкие движения стика, дополнительный зацеп передней оси в медленных поворотах и задней оси на скорости. Отклик руля и клавиатуры не менялся. Для сравнения запускай `Start-2026-With-Textures.cmd`.
+## Launch presets
 
-В `f1ce_recomp.log` строки `slick test:` показывают, что экспериментальные расчёты сработали. Это не означает, что время круга изменится на такой же процент.
+| Script | What it changes |
+| --- | --- |
+| `Start-Stock-Test.cmd` | Stock physics and textures, for comparison. |
+| `Start-Slick-Test.cmd` | Grip multiplier ×1.05 and wear accumulation ×1.25. |
+| `Start-2026-Test.cmd` | Grip multiplier rises by 14% up to 90 km/h, tapering to 8% at 260 km/h. Adds up to 12% to positive drive torque under throttle while in gear and without rear wheelspin; the boost fades to zero at 280 km/h. Wear accumulation stays at ×1.25. |
+| `Start-2026-With-Textures.cmd` | The same 2026 preset with smooth dry tread textures. |
+| `Start-Handling-Test.cmd` | Builds on the textured 2026 preset: softer small gamepad stick inputs without reducing full lock, extra front grip at low speed, and extra rear grip at high speed. The input curve for wheels and keyboards is unchanged. |
 
-Проверка на сухом Сильверстоуне: обе точки изменения сработали (`wear increment x1.25` и `dry grip vector x1.05`), игра штатно завершила тестовый запуск. Влияние на время круга и ресурс комплекта отдельно не замерялось.
+The 2026 preset is a handling approximation, not a simulation of the 2026 F1 power unit. Compare it against the stock preset, or compare the two textured presets to isolate the handling changes.
 
-Пресет «2026» также прошёл проверочный заезд на сухом Сильверстоуне: журнал подтвердил сцепление ×1,14 на старте, износ ×1,25 и включение помощи на разгоне. Максимальную прибавку и разницу во времени разгона отдельно не замеряли.
+## Verification
 
-В заезде с текстурами журнал подтвердил замену трёх карт в `offline.wad`; гладкий протектор виден на болиде в движении. Тест пресета управления подтвердил активацию физики; ощущения на геймпаде нужно проверить вручную.
-
-Штатный лаунчер и оригинальная игра не изменены. В этой папке свои сохранения, настройки и кеш. Текстуры находятся в `MODS/SLICK_TEXTURES`; комплект заменяет цвет, рельеф и карту бликов сухого протектора с сохранением всех девяти уровней детализации. Боковины, промежуточные и дождевые шины пакет не заменяет. Сравнение исходных и новых карт — в `Texture-Preview`.
+Dry Silverstone runs confirmed activation of the grip, wear, and drive changes in `f1ce_recomp.log` (look for `slick test:`). The texture run confirmed all three replacements in `offline.wad`, and the smooth tread was visible on track. Lap times, acceleration times, tyre life, and hands-on gamepad feel have not been measured.
