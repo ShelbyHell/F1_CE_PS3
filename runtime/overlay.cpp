@@ -520,42 +520,65 @@ void draw_tyre_hud(ImDrawList* dl, float W, float H) {
     if (!car) return;
 
     const float S = std::clamp(H / 720.0f, 0.70f, 1.40f);
-    const float box_w = 175.0f * S, box_h = 135.0f * S;
-    const float pad_right = 20.0f * S, pad_bottom = 20.0f * S;
+    const float box_w = 186.0f * S, box_h = 142.0f * S;
+    const float pad_right = 24.0f * S;
+    // Positioned directly above the in-game speedometer/rev-counter cluster
+    const float pad_bottom = 205.0f * S;
     const float x0 = W - box_w - pad_right, y0 = H - box_h - pad_bottom;
     const float x1 = x0 + box_w, y1 = y0 + box_h;
 
-    // Semi-transparent dark background panel with rounded corners and border
-    dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), IM_COL32(10, 12, 16, 205), 8.0f * S);
-    dl->AddRect(ImVec2(x0, y0), ImVec2(x1, y1), IM_COL32(70, 75, 85, 230), 8.0f * S, 0, 1.5f);
+    // Siemens 2006 F1 broadcast color scheme
+    const ImU32 SIEMENS_PETROL   = IM_COL32(0, 102, 112, 255);
+    const ImU32 SIEMENS_CYAN     = IM_COL32(0, 163, 166, 255);
+    const ImU32 SIEMENS_BG       = IM_COL32(12, 16, 20, 222);
+    const ImU32 SIEMENS_BORDER   = IM_COL32(0, 140, 150, 185);
+    const ImU32 TEXT_WHITE       = IM_COL32(255, 255, 255, 255);
 
-    // Header: compound badge & wake status
+    // Main dark glass telemetry panel
+    dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), SIEMENS_BG, 5.0f * S);
+    dl->AddRect(ImVec2(x0, y0), ImVec2(x1, y1), SIEMENS_BORDER, 5.0f * S, 0, 1.5f * S);
+
+    // Header bar (y0 .. y0 + 22*S): authentic 2006 FOM / Siemens slanted sponsor badge
+    const float badge_w = 64.0f * S, slant = 5.0f * S;
+    dl->AddQuadFilled(ImVec2(x0, y0),
+                      ImVec2(x0 + badge_w + slant, y0),
+                      ImVec2(x0 + badge_w, y0 + 22.0f * S),
+                      ImVec2(x0, y0 + 22.0f * S),
+                      SIEMENS_PETROL);
+
+    const float s_txt_w = text_w(F.black, 10.5f * S, "SIEMENS");
+    text(dl, F.black, 10.5f * S, ImVec2(x0 + (badge_w - s_txt_w) * 0.45f, y0 + 5.0f * S), TEXT_WHITE, "SIEMENS");
+
+    // Header title & tyre compound tag
     const auto compound = slick::selected_compound();
-    const char* c_name = compound == slick::Compound::soft ? "SOFT" : compound == slick::Compound::hard ? "HARD" : "SLICK";
+    const char* c_name = compound == slick::Compound::soft ? "SOFT" : compound == slick::Compound::hard ? "HARD" : "TYRES";
     const ImU32 c_col = compound == slick::Compound::soft ? IM_COL32(235, 45, 45, 255)
-                      : compound == slick::Compound::hard ? IM_COL32(235, 235, 235, 255)
-                      : IM_COL32(245, 195, 35, 255);
+                      : compound == slick::Compound::hard ? IM_COL32(240, 240, 240, 255)
+                      : SIEMENS_CYAN;
 
-    text(dl, F.black, 13.0f * S, ImVec2(x0 + 10.0f * S, y0 + 8.0f * S), c_col, c_name);
+    text(dl, F.semi, 10.5f * S, ImVec2(x0 + badge_w + 12.0f * S, y0 + 5.0f * S), c_col, c_name);
 
-    const auto wake = slick::current_wake();
-    if (wake.in_slipstream) {
-        text(dl, F.semi, 11.5f * S, ImVec2(x0 + 65.0f * S, y0 + 9.0f * S), IM_COL32(0, 230, 255, 255), "TOW +6%");
-    } else if (wake.intensity > 0.15f) {
-        text(dl, F.semi, 11.5f * S, ImVec2(x0 + 65.0f * S, y0 + 9.0f * S), IM_COL32(255, 140, 20, 255), "WAKE -4%");
-    } else {
-        text(dl, F.semi, 11.5f * S, ImVec2(x0 + 65.0f * S, y0 + 9.0f * S), IM_COL32(60, 215, 80, 255), "CLEAN");
-    }
+    // Thin cyan accent dividing line under the header
+    dl->AddLine(ImVec2(x0, y0 + 22.0f * S), ImVec2(x1, y0 + 22.0f * S), SIEMENS_CYAN, 1.2f * S);
 
-    // Tyre blocks: FL, FR, RL, RR
-    const u32 slip = (ld32(car + 0x97c) >> 8) & 0xf;
-    const float tw = 32.0f * S, th = 34.0f * S;
+    // Center area: F1 chassis silhouette & tyre pods
     const float cx = x0 + box_w * 0.5f;
-    const float fl_x = cx - tw - 12.0f * S, fr_x = cx + 12.0f * S;
-    const float f_y = y0 + 28.0f * S, r_y = y0 + 68.0f * S;
+    const float f_y = y0 + 29.0f * S, r_y = y0 + 69.0f * S;
+    const float tw = 32.0f * S, th = 35.0f * S;
+    const float fl_x = cx - tw - 13.0f * S, fr_x = cx + 13.0f * S;
 
+    // Stylized broadcast chassis lines
+    dl->AddLine(ImVec2(cx - 20.0f * S, f_y + 3.0f * S), ImVec2(cx + 20.0f * S, f_y + 3.0f * S), IM_COL32(75, 88, 100, 180), 2.0f * S);
+    dl->AddLine(ImVec2(cx, f_y + 1.0f * S), ImVec2(cx, r_y + th - 2.0f * S), IM_COL32(80, 95, 110, 200), 2.0f * S);
+    dl->AddCircle(ImVec2(cx, (f_y + r_y) * 0.5f + 2.0f * S), 4.5f * S, IM_COL32(70, 85, 95, 180), 12, 1.5f * S);
+    dl->AddLine(ImVec2(cx - 18.0f * S, r_y + th - 3.0f * S), ImVec2(cx + 18.0f * S, r_y + th - 3.0f * S), IM_COL32(75, 88, 100, 180), 2.0f * S);
+
+    // 4 Tyre Pods
     const float xs[4] = {fl_x, fr_x, fl_x, fr_x};
     const float ys[4] = {f_y, f_y, r_y, r_y};
+    const char* wheel_names[4] = {"FL", "FR", "RL", "RR"};
+    const u32 slip = (ld32(car + 0x97c) >> 8) & 0xf;
+    const bool is_stock_grooved = (compound == slick::Compound::baseline && slick::selected_preset() == slick::Preset::stock);
 
     for (int w = 0; w < 4; ++w) {
         const float wear = std::bit_cast<float>(ld32(car + 0x8b0 + 4 * w));
@@ -563,46 +586,90 @@ void draw_tyre_hud(ImDrawList* dl, float W, float H) {
         const float life_pct = 100.0f - worn_pct;
         const bool slipping = ((slip >> w) & 1) != 0;
 
+        // Siemens 2006 broadcast telemetry tyre wear palette
         ImU32 tyre_col;
-        if (worn_pct < 30.0f) {
-            tyre_col = IM_COL32(40, 195, 75, 230);
-        } else if (worn_pct < 65.0f) {
-            tyre_col = IM_COL32(235, 175, 25, 230);
+        if (life_pct >= 70.0f) {
+            tyre_col = IM_COL32(0, 195, 110, 240);       // Fresh / Optimal: Siemens Green
+        } else if (life_pct >= 40.0f) {
+            tyre_col = IM_COL32(245, 180, 25, 240);      // Worn: Siemens Amber
         } else {
-            tyre_col = IM_COL32(220, 45, 45, 230);
+            tyre_col = IM_COL32(225, 45, 45, 240);       // Critical: Warning Red
         }
 
         const ImVec2 p0(xs[w], ys[w]), p1(xs[w] + tw, ys[w] + th);
-        dl->AddRectFilled(p0, p1, tyre_col, 4.0f * S);
+        dl->AddRectFilled(p0, p1, tyre_col, 3.0f * S);
 
-        if (slipping) {
-            dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 255), 4.0f * S, 0, 2.0f * S);
-        } else {
-            dl->AddRect(p0, p1, IM_COL32(20, 25, 30, 200), 4.0f * S, 0, 1.0f);
+        // Authentic 2006 4-groove pattern for stock tyres
+        if (is_stock_grooved) {
+            for (int g = 1; g <= 3; ++g) {
+                const float gx = xs[w] + tw * (g * 0.25f);
+                dl->AddLine(ImVec2(gx, ys[w] + 3.0f * S), ImVec2(gx, ys[w] + th - 3.0f * S), IM_COL32(10, 15, 20, 150), 1.0f);
+            }
         }
 
+        // Lockup or wheelspin slip border
+        if (slipping) {
+            dl->AddRect(ImVec2(p0.x - 1.0f, p0.y - 1.0f), ImVec2(p1.x + 1.0f, p1.y + 1.0f), IM_COL32(0, 230, 255, 200), 3.0f * S, 0, 2.0f * S);
+            dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 255), 3.0f * S, 0, 1.8f * S);
+        } else {
+            dl->AddRect(p0, p1, IM_COL32(15, 20, 25, 180), 3.0f * S, 0, 1.0f);
+        }
+
+        // Percentage text
         char pct_str[8];
         snprintf(pct_str, sizeof(pct_str), "%.0f%%", life_pct);
         const float str_w = text_w(F.semi, 10.0f * S, pct_str);
-        text(dl, F.semi, 10.0f * S, ImVec2(xs[w] + (tw - str_w) * 0.5f, ys[w] + (th - 10.0f * S) * 0.5f),
-             IM_COL32(10, 10, 10, 255), pct_str);
+        const ImU32 text_col = (life_pct < 40.0f) ? TEXT_WHITE : IM_COL32(12, 18, 22, 255);
+        text(dl, F.semi, 10.0f * S, ImVec2(xs[w] + (tw - str_w) * 0.5f, ys[w] + (th - 10.0f * S) * 0.5f), text_col, pct_str);
+
+        // Wheel position label (FL, FR, RL, RR)
+        text(dl, F.semi, 7.5f * S, ImVec2(xs[w] + 2.5f * S, ys[w] + 1.5f * S),
+             (life_pct < 40.0f ? IM_COL32(255, 210, 210, 220) : IM_COL32(10, 45, 35, 200)), wheel_names[w]);
     }
 
-    // Car silhouette / center spine
-    dl->AddLine(ImVec2(cx, f_y + 4.0f * S), ImVec2(cx, r_y + th - 4.0f * S), IM_COL32(100, 105, 115, 180), 2.0f * S);
+    // Footer divider line
+    dl->AddLine(ImVec2(x0 + 6.0f * S, y0 + 110.0f * S), ImVec2(x1 - 6.0f * S, y0 + 110.0f * S), IM_COL32(35, 48, 56, 200), 1.0f);
 
-    // Bottom telemetry line: speed and gear
-    const float kmh = std::max(slick::player_speed_kmh(), 0.0f);
-    const int gear = (int)(s8)ld8(car + 0x9b8);
-    char g_str[8];
-    if (gear == 0) snprintf(g_str, sizeof(g_str), "N");
-    else if (gear < 0) snprintf(g_str, sizeof(g_str), "R");
-    else snprintf(g_str, sizeof(g_str), "G%d", gear);
+    // Footer badges: Aerodynamic status (Left) & Brake Bias (Right)
+    const auto wake = slick::current_wake();
+    const float pill_y = y0 + 114.0f * S, pill_h = 20.0f * S;
 
-    char foot[32];
-    snprintf(foot, sizeof(foot), "%s   %.0f KM/H", g_str, kmh);
-    const float fw = text_w(F.semi, 11.0f * S, foot);
-    text(dl, F.semi, 11.0f * S, ImVec2(x0 + (box_w - fw) * 0.5f, y0 + 110.0f * S), IM_COL32(200, 205, 215, 240), foot);
+    // Aero Wake Badge
+    const float aero_x = x0 + 8.0f * S, aero_w = 94.0f * S;
+    ImU32 aero_bg, aero_border, aero_txt_col;
+    const char* aero_text;
+
+    if (wake.in_slipstream) {
+        aero_bg = IM_COL32(0, 140, 165, 230);
+        aero_border = IM_COL32(0, 230, 255, 240);
+        aero_txt_col = TEXT_WHITE;
+        aero_text = "SLIPSTREAM";
+    } else if (wake.intensity > 0.15f) {
+        aero_bg = IM_COL32(195, 105, 15, 230);
+        aero_border = IM_COL32(255, 165, 40, 240);
+        aero_txt_col = TEXT_WHITE;
+        aero_text = "TURBULENCE";
+    } else {
+        aero_bg = IM_COL32(15, 55, 50, 190);
+        aero_border = IM_COL32(0, 120, 110, 160);
+        aero_txt_col = IM_COL32(110, 225, 190, 240);
+        aero_text = "CLEAN AIR";
+    }
+
+    dl->AddRectFilled(ImVec2(aero_x, pill_y), ImVec2(aero_x + aero_w, pill_y + pill_h), aero_bg, 3.0f * S);
+    dl->AddRect(ImVec2(aero_x, pill_y), ImVec2(aero_x + aero_w, pill_y + pill_h), aero_border, 3.0f * S, 0, 1.0f);
+    const float at_w = text_w(F.semi, 9.5f * S, aero_text);
+    text(dl, F.semi, 9.5f * S, ImVec2(aero_x + (aero_w - at_w) * 0.5f, pill_y + 4.5f * S), aero_txt_col, aero_text);
+
+    // Brake Bias Badge
+    const float bb_x = x0 + 108.0f * S, bb_w = 70.0f * S;
+    dl->AddRectFilled(ImVec2(bb_x, pill_y), ImVec2(bb_x + bb_w, pill_y + pill_h), IM_COL32(22, 28, 36, 220), 3.0f * S);
+    dl->AddRect(ImVec2(bb_x, pill_y), ImVec2(bb_x + bb_w, pill_y + pill_h), IM_COL32(0, 125, 135, 170), 3.0f * S, 0, 1.0f);
+
+    char bb_str[16];
+    snprintf(bb_str, sizeof(bb_str), "BIAS %.0f%%", slick::selected_brake_bias() * 100.0f);
+    const float bb_w_txt = text_w(F.semi, 9.5f * S, bb_str);
+    text(dl, F.semi, 9.5f * S, ImVec2(bb_x + (bb_w - bb_w_txt) * 0.5f, pill_y + 4.5f * S), TEXT_WHITE, bb_str);
 }
 
 // ------------------------------------------------------------------ frame

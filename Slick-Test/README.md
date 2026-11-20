@@ -56,12 +56,13 @@ Corner entry under braking dynamically evaluates load transfer across axles:
 
 ### In-Game Tyre HUD Widget
 
-Enable **Tyre HUD widget** in the launcher or set `F1CE_TYRE_HUD=1`. A compact on-screen dashboard displays in the lower right during race sessions:
-- Four individual tyre temperature & wear blocks (FL, FR, RL, RR) with percentage life remaining.
-- Real-time colour coding (green for fresh, amber for worn, red for critical).
-- White flashing borders when wheelspin or lockup slip occurs.
-- Active compound badge (Soft, Hard, Slick) and aerodynamic status indicator (`CLEAN`, `WAKE -4%`, `TOW +6%`).
-- Current gear and telemetry speed. Rendered with premultiplied alpha overlay and zero gamepad interference.
+Enable **Tyre HUD widget** in the launcher or set `F1CE_TYRE_HUD=1`. A compact on-screen dashboard styled in authentic Formula 1 2006 FOM / Siemens TV broadcast graphics displays directly above the in-game speedometer/rev-counter in the lower right:
+- Authentic Siemens petrol/teal header (`SIEMENS`) with slanted FOM 2006 styling and compound badge (`SOFT`, `HARD`, `TYRES`).
+- F1 chassis silhouette with four individual tyre pods (FL, FR, RL, RR) showing percentage life remaining and grooved/slick pattern.
+- Siemens broadcast colour coding: emerald green (fresh >70%), amber (worn 40-70%), and warning red (critical <40%).
+- White and electric cyan pulsing borders when wheelspin or lockup slip occurs.
+- Telemetry footer with aerodynamic wake status (`CLEAN AIR`, `TURBULENCE`, `SLIPSTREAM`) and brake bias setting (`BIAS 56%`).
+- Positioned seamlessly above the game's native rev counter without overlapping or gamepad/wheel input interference.
 
 ### Dry compounds
 
