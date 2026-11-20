@@ -200,11 +200,10 @@ struct HleRegistrar {
 #define RET(v) do { c.r[3] = (u64)(s64)(v); return; } while (0)
 
 // time
-u64 time_usec();          // monotonic microseconds since start
-// Clock of the per-draw timers: TSC ticks in microseconds (time_usec costs ~40 ns, 6% of the render thread at some 15
-// reads per draw). Its origin is not time_usec's: only differences of two prof_usec values mean anything.
 extern const u64 g_tsc_scale;   // microseconds per tick, 32.32 fixed point
+extern const u64 g_tsc_start;
 FORCE_INLINE u64 prof_usec() { return (u64)(((unsigned __int128)__rdtsc() * g_tsc_scale) >> 32); }
+FORCE_INLINE u64 time_usec() { return (u64)(((unsigned __int128)(__rdtsc() - g_tsc_start) * g_tsc_scale) >> 32); }
 void sleep_usec(u64 us);
 void sleep_until_precise(u64 t);   // core.cpp: until time_usec() == t, without the ~2 ms overshoot of sleep_for
 void raise_thread_priority(bool highest = false);   // core.cpp: threads on the frame's critical path (F1CE_PRIO=0: off)

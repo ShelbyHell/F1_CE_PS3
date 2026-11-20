@@ -121,7 +121,7 @@ endif()
 
 # x86-64-v3 (AVX2/FMA): needed for fused VMX multiply-add and fast byte swaps.
 # Spelled out as features because zig's driver does not accept -march=x86-64-v3.
-set(ARCH_FLAGS -msse4.2 -mpopcnt -mavx -mavx2 -mfma -mbmi -mbmi2 -mlzcnt -mmovbe -mf16c)
+set(ARCH_FLAGS -msse4.2 -mpopcnt -mavx -mavx2 -mfma -mbmi -mbmi2 -mlzcnt -mmovbe -mf16c -fno-math-errno -ffp-contract=fast -fomit-frame-pointer -ffunction-sections -fdata-sections)
 
 add_library(ppu_generated OBJECT ${GENERATED_SOURCES})
 # files whose giant functions (up to ~14k lines) take hours to compile instrumented: trained without a profile
@@ -156,7 +156,7 @@ target_compile_options(spu_aot PRIVATE ${ARCH_FLAGS} -O2 -fno-strict-aliasing -f
 # (f1ce_online: ONLINE.BIN, translated by 'tools/recomp.py online' into generated_online; built when that exists).
 add_library(f1ce_runtime OBJECT ${RUNTIME_SOURCES})
 target_include_directories(f1ce_runtime PRIVATE runtime generated)
-target_compile_options(f1ce_runtime PRIVATE ${ARCH_FLAGS} -fno-strict-aliasing -fwrapv)
+target_compile_options(f1ce_runtime PRIVATE ${ARCH_FLAGS} -O3 -fno-strict-aliasing -fwrapv)
 if(F1CE_PGO STREQUAL "USE")   # a new profile recompiles the game's own sources
   set_property(SOURCE ${RUNTIME_SOURCES} ${GENERATED_SOURCES} ${SPU_AOT_SOURCES} APPEND PROPERTY OBJECT_DEPENDS
     ${F1CE_PGO_PROFILE})
@@ -191,7 +191,7 @@ function(f1ce_game target generated)
     endif()
   endif()
   if(WIN32)
-    target_link_options(${target} PRIVATE -static -Wl,--stack,8388608 -Wl,-Map=${target}.map)
+    target_link_options(${target} PRIVATE -static -Wl,--stack,8388608 -Wl,-Map=${target}.map -Wl,--gc-sections -Wl,--icf=all)
   else()
     find_package(Threads REQUIRED)
     target_link_libraries(${target} PRIVATE Threads::Threads ${CMAKE_DL_LIBS})

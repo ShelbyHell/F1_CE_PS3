@@ -122,7 +122,7 @@ void fatal(const char* fmt, ...) {
 }
 
 // ------------------------------------------------------------------ time
-static const auto g_start = std::chrono::steady_clock::now();
+const u64 g_tsc_start = __rdtsc();
 const u64 g_tsc_scale = [] {
     const auto t0 = std::chrono::steady_clock::now();
     const u64 c0 = __rdtsc();
@@ -130,9 +130,6 @@ const u64 g_tsc_scale = [] {
     const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
     return (u64)(us * 4294967296.0 / (double)(__rdtsc() - c0));
 }();
-u64 time_usec() {
-    return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - g_start).count();
-}
 // Short waits (polling loops of the emulated hardware) must not round up to the OS timer tick (>= 1 ms on
 // Windows): they yield until the deadline instead. Longer ones sleep (timer resolution raised to 1 ms).
 void sleep_usec(u64 us) {
@@ -574,8 +571,7 @@ std::string process_mem_report() {
     return s;
 }
 u64 ppu_timebase() {  // 79.8 MHz
-    auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - g_start).count();
-    return (u64)((unsigned __int128)ns * 798 / 10000);
+    return (u64)((unsigned __int128)time_usec() * 798 / 10);
 }
 
 // ------------------------------------------------------------------ memory

@@ -256,9 +256,11 @@ inline WakeInfo evaluate_wake(Vec3 pos, Vec3 fwd, const Vec3* others, size_t cou
         if (dist_fwd < 2.5f || dist_fwd > 65.0f) continue;
 
         const Vec3 perp{d.x - dist_fwd * fwd.x, d.y - dist_fwd * fwd.y, d.z - dist_fwd * fwd.z};
-        const float lat_dist = std::sqrt(perp.x * perp.x + perp.y * perp.y + perp.z * perp.z);
         const float cone_radius = 2.2f + 0.08f * dist_fwd;
-        if (lat_dist > cone_radius) continue;
+        const float lat_dist_sq = perp.x * perp.x + perp.y * perp.y + perp.z * perp.z;
+        if (lat_dist_sq > cone_radius * cone_radius) continue;
+
+        const float lat_dist = std::sqrt(lat_dist_sq);
 
         const float long_fade = (65.0f - dist_fwd) / 62.5f;
         const float lat_fade = (cone_radius - lat_dist) / cone_radius;

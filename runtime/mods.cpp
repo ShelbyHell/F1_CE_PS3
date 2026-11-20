@@ -104,14 +104,14 @@ void add_pack(PackIndex& ix, const char* env_name, const char* env_dir, const ch
     const char* pack = getenv(env_name);
     if (!pack || !*pack) return;
     const char* dir = getenv(env_dir);
-    add_pack_folder(ix, pack, stdfs::u8path(dir && *dir ? dir : def_dir) / stdfs::u8path(pack));
+    add_pack_folder(ix, pack, stdfs::path(dir && *dir ? dir : def_dir) / stdfs::path(pack));
 }
 
 stdfs::path season_pack_root() {
     const char* pack = getenv("F1CE_MOD_PACK");
     if (!pack || !*pack) return {};
     const char* dir = getenv("F1CE_MODS_DIR");
-    return stdfs::u8path(dir && *dir ? dir : "MODS") / stdfs::u8path(pack);
+    return stdfs::path(dir && *dir ? dir : "MODS") / stdfs::path(pack);
 }
 
 PackIndex build_index() {
@@ -119,7 +119,7 @@ PackIndex build_index() {
     add_pack(ix, "F1CE_MOD_PACK", "F1CE_MODS_DIR", "MODS");
     if (const char* enabled = getenv("F1CE_SLICK_TEXTURES"); enabled && strcmp(enabled, "1") == 0) {
         const char* dir = getenv("F1CE_MODS_DIR");
-        const auto mods_dir = stdfs::u8path(dir && *dir ? dir : "MODS");
+        const auto mods_dir = stdfs::path(dir && *dir ? dir : "MODS");
         const auto installed = mods_dir / "SLICK_TEXTURES";
         // In a source checkout the generator writes next to the handling scripts, not the build.
         const auto gen_handling = mods_dir / ".." / ".." / "handling" / "MODS" / "SLICK_TEXTURES";
@@ -149,7 +149,7 @@ struct WadLayout {
 };
 
 std::shared_ptr<const WadLayout> build_layout(const std::string& host, const std::map<u32, stdfs::path>& repl) {
-    FILE* f = open_read(stdfs::u8path(host));
+    FILE* f = open_read(stdfs::path(host));
     if (!f) return nullptr;
     u8 hdr[8];
     std::vector<u8> tab;
@@ -160,7 +160,7 @@ std::shared_ptr<const WadLayout> build_layout(const std::string& host, const std
         ok = fread(tab.data(), 1, tab.size(), f) == tab.size();
     } else ok = false;
     std::error_code ec;
-    u64 orig_size = stdfs::file_size(stdfs::u8path(host), ec);
+    u64 orig_size = stdfs::file_size(stdfs::path(host), ec);
     fclose(f);
     if (!ok || ec) {
         LOG_W("mods: %s is not an archive, left as is", host.c_str());
@@ -204,7 +204,7 @@ std::shared_ptr<const WadLayout> build_layout(const std::string& host, const std
         LOG_W("mods: %s would exceed 4 GB, left as is", host.c_str());
         return nullptr;
     }
-    LOG_I("mods: %s: %zu entries replaced, %zu added", PATH_STR(stdfs::u8path(host).filename()).c_str(), replaced,
+    LOG_I("mods: %s: %zu entries replaced, %zu added", PATH_STR(stdfs::path(host).filename()).c_str(), replaced,
           L->added.size() - replaced);
     return L;
 }
@@ -212,7 +212,7 @@ std::shared_ptr<const WadLayout> build_layout(const std::string& host, const std
 std::shared_ptr<const WadLayout> layout_for(const std::string& host) {
     const auto& ix = index();
     if (ix.wads.empty()) return nullptr;
-    auto w = ix.wads.find(lower(PATH_STR(stdfs::u8path(host).filename())));
+    auto w = ix.wads.find(lower(PATH_STR(stdfs::path(host).filename())));
     if (w == ix.wads.end()) return nullptr;
     static std::mutex m;
     static std::unordered_map<std::string, std::shared_ptr<const WadLayout>> cache;
@@ -298,8 +298,8 @@ u32 name_hash(const std::string& path) {
 std::string loose_override(const std::string& host_path) {
     const auto& ix = index();
     if (ix.loose.empty()) return {};
-    stdfs::path usr = stdfs::u8path(g_game_dir) / "USRDIR";
-    std::string rel = PATH_STR(stdfs::path(stdfs::u8path(host_path).lexically_relative(usr).generic_string()));
+    stdfs::path usr = stdfs::path(g_game_dir) / "USRDIR";
+    std::string rel = PATH_STR(stdfs::path(stdfs::path(host_path).lexically_relative(usr).generic_string()));
     if (rel.empty() || rel.rfind("..", 0) == 0) return {};
     auto it = ix.loose.find(lower(rel));
     if (it == ix.loose.end()) return {};
@@ -312,7 +312,7 @@ std::unique_ptr<VirtualFile> open_wad(const std::string& host_path) {
     if (!L) return nullptr;
     auto v = std::make_unique<VirtualWad>();
     v->L = std::move(L);
-    v->orig = open_read(stdfs::u8path(host_path));
+    v->orig = open_read(stdfs::path(host_path));
     if (!v->orig) return nullptr;
     return v;
 }

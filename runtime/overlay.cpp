@@ -12,7 +12,9 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <cstring>
 #include <ctime>
+#include <immintrin.h>
 #include <unordered_map>
 
 #include "font_black_italic.h"
@@ -31,10 +33,19 @@ struct Target {
 };
 
 inline void blend(u32& d, u32 sr, u32 sg, u32 sb, u32 sa) {   // source premultiplied, 0..255
+    if (__builtin_expect(sa == 255, 0)) {
+        d = sr | (sg << 8) | (sb << 16) | (255u << 24);
+        return;
+    }
+    if (__builtin_expect(sa == 0, 0)) return;
     const u32 ia = 255 - sa;
     const u32 dr = d & 255, dg = (d >> 8) & 255, db = (d >> 16) & 255, da = d >> 24;
-    d = (sr + (dr * ia + 127) / 255) | (sg + (dg * ia + 127) / 255) << 8 | (sb + (db * ia + 127) / 255) << 16 |
-        (sa + (da * ia + 127) / 255) << 24;
+    auto scale = [](u32 c, u32 a) { return ((c * a + 128) * 257) >> 16; };
+    const u32 r = std::min(255u, sr + scale(dr, ia));
+    const u32 g = std::min(255u, sg + scale(dg, ia));
+    const u32 b = std::min(255u, sb + scale(db, ia));
+    const u32 da_out = std::min(255u, sa + scale(da, ia));
+    d = r | (g << 8) | (b << 16) | (da_out << 24);
 }
 
 void sample(const SoftTex& t, float u, float v, float o[4]) {   // bilinear, clamped
@@ -126,7 +137,7 @@ void raster_tri(Target& t, const ImDrawVert* v0, const ImDrawVert* v1, const ImD
 }
 
 void raster(Target& t, const ImDrawData* dd) {
-    std::fill(t.px.begin(), t.px.end(), 0u);
+    if (!t.px.empty()) std::memset(t.px.data(), 0, t.px.size() * sizeof(u32));
     for (const ImDrawList* dl : dd->CmdLists)
         for (const ImDrawCmd& cmd : dl->CmdBuffer) {
             if (cmd.UserCallback) continue;
@@ -141,11 +152,27 @@ void raster(Target& t, const ImDrawData* dd) {
         }
 }
 
-u64 hash_draw_data(const ImDrawData* dd) {   // FNV-1a over everything that is drawn
-    u64 h = 1469598103934665603ull;
+u64 hash_draw_data(const ImDrawData* dd) {   // Hardware accelerated CRC32 over draw commands
+    u64 h = 0xFFFFFFFFFFFFFFFFull;
     auto mix = [&](const void* p, size_t n) {
         const u8* b = (const u8*)p;
-        for (size_t i = 0; i < n; i++) h = (h ^ b[i]) * 1099511628211ull;
+        while (n >= 8) {
+            u64 v;
+            std::memcpy(&v, b, 8);
+            h = _mm_crc32_u64(h, v);
+            b += 8;
+            n -= 8;
+        }
+        if (n >= 4) {
+            u32 v;
+            std::memcpy(&v, b, 4);
+            h = _mm_crc32_u32((u32)h, v);
+            b += 4;
+            n -= 4;
+        }
+        while (n--) {
+            h = _mm_crc32_u8((u32)h, *b++);
+        }
     };
     for (const ImDrawList* dl : dd->CmdLists) {
         mix(dl->VtxBuffer.Data, (size_t)dl->VtxBuffer.Size * sizeof(ImDrawVert));
