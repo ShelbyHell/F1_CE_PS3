@@ -48,8 +48,10 @@ struct Effect {
     int id = -1;
     bool running = false;
     SDL_HapticEffect last{};
+    u64 last_update_us = 0;
 };
 Effect g_constant, g_spring, g_damper, g_friction;
+static float s_filtered_c = 0.0f;
 
 std::string ini_path() {
     if (const char* e = getenv("F1CE_WHEEL_INI")) return e;
@@ -117,6 +119,7 @@ void close_haptic() {
     }
     g_haptic = nullptr;
     g_constant = g_spring = g_damper = g_friction = {};
+    s_filtered_c = 0.0f;
     std::lock_guard lk(g_mutex);
     g_ffb_on = false;
 }
@@ -241,6 +244,46 @@ void read_input() {
 }
 
 // ------------------------------------------------------------------ force feedback
+// checks if the effect parameters have changed significantly enough to warrant updating DirectInput/SDL3
+bool should_update(const Effect& e, const SDL_HapticEffect& want, u64 now_us) {
+    if (e.id < 0 || !e.running) return true;
+    if (e.last.type != want.type) return true;
+    if (want.type == SDL_HAPTIC_CONSTANT) {
+        const int last_lvl = e.last.constant.level;
+        const int want_lvl = want.constant.level;
+        // Direction change or zero crossing: immediate update for zero latency
+        if ((last_lvl > 0 && want_lvl <= 0) || (last_lvl < 0 && want_lvl >= 0) || (last_lvl == 0 && want_lvl != 0)) {
+            return true;
+        }
+        // Substantial change beyond micro-jitter threshold (16 / 32767 ≈ 0.048%)
+        if (std::abs(want_lvl - last_lvl) >= 16) {
+            return true;
+        }
+        // Periodic convergence for subtle slow ramps (every ~16 ms / 60 Hz)
+        if (want_lvl != last_lvl && (now_us - e.last_update_us >= 16000)) {
+            return true;
+        }
+        return false;
+    }
+    if (want.type == SDL_HAPTIC_SPRING || want.type == SDL_HAPTIC_DAMPER || want.type == SDL_HAPTIC_FRICTION) {
+        const auto& c_last = e.last.condition;
+        const auto& c_want = want.condition;
+        if (std::abs((int)c_want.left_coeff[0] - (int)c_last.left_coeff[0]) >= 32 ||
+            std::abs((int)c_want.right_coeff[0] - (int)c_last.right_coeff[0]) >= 32 ||
+            std::abs((int)c_want.center[0] - (int)c_last.center[0]) >= 32 ||
+            std::abs((int)c_want.deadband[0] - (int)c_last.deadband[0]) >= 32 ||
+            std::abs((int)c_want.left_sat[0] - (int)c_last.left_sat[0]) >= 64 ||
+            std::abs((int)c_want.right_sat[0] - (int)c_last.right_sat[0]) >= 64) {
+            return true;
+        }
+        if (memcmp(&e.last, &want, sizeof(want)) != 0 && (now_us - e.last_update_us >= 50000)) {
+            return true;
+        }
+        return false;
+    }
+    return memcmp(&e.last, &want, sizeof(want)) != 0;
+}
+
 // runs (or updates) an effect; stops it when off
 void put(Effect& e, bool on, const SDL_HapticEffect& want) {
     if (!g_haptic) return;
@@ -249,6 +292,7 @@ void put(Effect& e, bool on, const SDL_HapticEffect& want) {
         e.running = false;
         return;
     }
+    const u64 now = time_usec();
     if (e.id < 0) {
         e.id = SDL_CreateHapticEffect(g_haptic, &want);
         if (e.id < 0) {
@@ -257,9 +301,11 @@ void put(Effect& e, bool on, const SDL_HapticEffect& want) {
             return;
         }
         e.last = want;
-    } else if (memcmp(&e.last, &want, sizeof(want)) != 0) {
+        e.last_update_us = now;
+    } else if (should_update(e, want, now)) {
         SDL_UpdateHapticEffect(g_haptic, e.id, &want);
         e.last = want;
+        e.last_update_us = now;
     }
     if (!e.running) {
         SDL_RunHapticEffect(g_haptic, e.id, 1);
@@ -282,19 +328,89 @@ void apply_ffb(float steer_unclamped) {
     auto q16 = [](float v) { return (Sint16)std::clamp((int)std::lround(v * 32767.0f), -32767, 32767); };
     auto u16 = [](float v) { return (Uint16)std::clamp((int)std::lround(v * 65535.0f), 0, 65535); };
 
-    // constant: the game's, the minimum force, and the soft lock beyond the game's steering lock
-    float c = f.constant * g_cfg.constant / 100.0f;
-    if (std::fabs(c) > 0.002f) c = std::copysign(g_cfg.min_force / 100.0f + (1 - g_cfg.min_force / 100.0f) * std::fabs(c), c);
+    // 1. Base constant force from game physics
+    float c = f.constant * (g_cfg.constant / 100.0f);
+
+    // 2. Minimum force with smooth Hermite blend around zero to prevent notch & gear clattering
+    const float m = std::clamp(g_cfg.min_force / 100.0f, 0.0f, 0.40f);
+    if (m > 0.0f) {
+        const float abs_c = std::fabs(c);
+        constexpr float kKnee = 0.06f;   // 6% blend zone
+        float boost = m;
+        if (abs_c < kKnee) {
+            const float u = abs_c / kKnee;
+            boost *= u * u * (3.0f - 2.0f * u);   // Smoothstep C1 curve: 0 at center, m at knee
+        }
+        c = std::copysign(boost + (1.0f - m) * abs_c, c);
+    }
+
+    // 3. Adaptive low-pass filter to eliminate high-frequency road chatter and kerb rattle
+    //    Micro-oscillations (kerb/road noise, delta <= 0.02) are heavily smoothed (alpha = 0.35).
+    //    Large transients (driver inputs, snap slides, delta >= 0.14) have zero filtering lag (alpha = 1.0).
+    const float delta = std::fabs(c - s_filtered_c);
+    float alpha;
+    if (delta >= 0.14f) {
+        alpha = 1.0f;
+    } else if (delta <= 0.02f) {
+        alpha = 0.35f;
+    } else {
+        const float t = (delta - 0.02f) / (0.14f - 0.02f);
+        alpha = 0.35f + t * 0.65f;
+    }
+    s_filtered_c += alpha * (c - s_filtered_c);
+    c = s_filtered_c;
+
+    // 4. Spring handling and centering curve calibration
+    const bool is_autocenter = f.autocenter;
+    if (is_autocenter && g_cfg.autocenter >= 0) {
+        f.spring = g_cfg.autocenter > 0;
+        f.spring_center = 0.0f;
+        f.spring_deadband = 0.0f;
+        f.spring_left = f.spring_right = g_cfg.autocenter / 100.0f;
+        f.spring_sat = 1.0f;
+    } else if (!f.spring && g_cfg.autocenter > 0) {
+        f.spring = true;
+        f.spring_center = 0.0f;
+        f.spring_deadband = 0.0f;
+        f.spring_left = f.spring_right = g_cfg.autocenter / 100.0f;
+        f.spring_sat = 1.0f;
+    }
+
+    // Centering spring scale:
+    // When autocenter is explicitly configured (>= 0), f.spring_left is already g_cfg.autocenter / 100.0f.
+    // For game spring (in-race), stiffness scales with game spring setting and steering lock ratio.
+    const float k_spring = (is_autocenter && g_cfg.autocenter >= 0)
+                               ? 1.0f
+                               : (g_cfg.spring / 100.0f * float(g_cfg.range) / float(g_cfg.lock_deg(g_game_lock)));
+
+    // Fallback: If wheel does not support hardware condition spring, synthesize centering spring into constant force
+    if (!(feat & SDL_HAPTIC_SPRING) && f.spring) {
+        float disp = steer_unclamped - f.spring_center;
+        if (std::fabs(disp) <= f.spring_deadband) {
+            disp = 0.0f;
+        } else {
+            disp -= std::copysign(f.spring_deadband, disp);
+        }
+        const float k = (disp > 0.0f ? f.spring_right : f.spring_left) * k_spring;
+        const float f_spring = -std::clamp(disp * k, -f.spring_sat, f.spring_sat);
+        c += f_spring;
+    }
+
+    // 5. Soft lock beyond the game's steering lock (applied after filtering for crisp, solid end-stops)
     if (g_cfg.soft_lock && std::fabs(steer_unclamped) > 1.0f)
         c -= std::copysign(std::min((std::fabs(steer_unclamped) - 1.0f) * 25.0f, 1.0f), steer_unclamped);
+
     c = std::clamp(c * gain, -1.0f, 1.0f);
+
+    // Constant force effect: Keep running at level 0 when force is null/micro, avoiding Stop/Start thrashing
     SDL_HapticEffect e{};
     e.type = SDL_HAPTIC_CONSTANT;
     e.constant.direction.type = SDL_HAPTIC_CARTESIAN;
     e.constant.direction.dir[0] = 1;
     e.constant.length = SDL_HAPTIC_INFINITY;
     e.constant.level = q16(-c * dir);   // (a positive level turns the wheel towards negative values)
-    put(g_constant, (feat & SDL_HAPTIC_CONSTANT) && std::fabs(c) > 0.002f, e);
+    put(g_constant, (feat & SDL_HAPTIC_CONSTANT), e);
+
     static const bool log = getenv("F1CE_WHEEL_LOG") && atoi(getenv("F1CE_WHEEL_LOG"));
     if (log) {
         static u64 next = 0;
@@ -308,16 +424,7 @@ void apply_ffb(float steer_unclamped) {
         }
     }
 
-    // spring: the game's, or the fixed centring spring of the settings in place of the wheel's default one
-    if (f.autocenter && g_cfg.autocenter >= 0) {
-        f.spring = g_cfg.autocenter > 0;
-        f.spring_center = f.spring_deadband = 0;
-        f.spring_left = f.spring_right = g_cfg.autocenter / 100.0f;
-        f.spring_sat = 1;
-    } else if (!f.spring && g_cfg.autocenter > 0) {
-        f.spring = true;
-        f.spring_left = f.spring_right = g_cfg.autocenter / 100.0f;
-    }
+    // Condition effects
     auto condition = [&](Uint16 type, float left, float right, float sat, float center, float deadband, float k_scale) {
         SDL_HapticEffect x{};
         x.type = type;
@@ -332,17 +439,18 @@ void apply_ffb(float steer_unclamped) {
         x.condition.deadband[0] = u16(std::clamp(deadband * raw_per / 32767.0f, 0.0f, 1.0f));
         return x;
     };
-    // (the game's spring stiffness is per unit of its steering: per raw unit it grows with range / lock)
-    const float k_spring = g_cfg.spring / 100.0f * float(g_cfg.range) / float(g_cfg.lock_deg(g_game_lock));
     put(g_spring, (feat & SDL_HAPTIC_SPRING) && f.spring,
         condition(SDL_HAPTIC_SPRING, f.spring_left, f.spring_right, f.spring_sat, f.spring_center, f.spring_deadband, k_spring));
-    // damper: the game's, and at least the wheel weight of the settings
+
+    // Damper: the game's, at least the wheel weight, plus calibrated autocenter damping for smooth return without ringing
     float dl = f.damper ? f.damper_left * g_cfg.damper / 100.0f : 0, dr = f.damper ? f.damper_right * g_cfg.damper / 100.0f : 0;
     const float w = g_cfg.weight / 100.0f;
-    dl = std::max(dl, w);
-    dr = std::max(dr, w);
+    const float autocenter_damp = is_autocenter ? 0.15f : 0.0f;
+    dl = std::max({dl, w, autocenter_damp});
+    dr = std::max({dr, w, autocenter_damp});
     put(g_damper, (feat & SDL_HAPTIC_DAMPER) && (dl > 0 || dr > 0),
         condition(SDL_HAPTIC_DAMPER, dl, dr, f.damper ? std::max(f.damper_sat, w) : 1.0f, 0, 0, 1.0f));
+
     put(g_friction, (feat & SDL_HAPTIC_FRICTION) && f.friction && g_cfg.friction > 0,
         condition(SDL_HAPTIC_FRICTION, f.friction_coef, f.friction_coef, f.friction_sat, 0, 0, g_cfg.friction / 100.0f));
 }
