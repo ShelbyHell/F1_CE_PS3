@@ -61,11 +61,7 @@ struct PackIndex {
 };
 
 // adds the files of one pack folder; later packs replace the earlier ones' entries
-void add_pack(PackIndex& ix, const char* env_name, const char* env_dir, const char* def_dir) {
-    const char* pack = getenv(env_name);
-    if (!pack || !*pack) return;
-    const char* dir = getenv(env_dir);
-    stdfs::path root = stdfs::u8path(dir && *dir ? dir : def_dir) / stdfs::u8path(pack);
+void add_pack_folder(PackIndex& ix, const char* pack, const stdfs::path& root) {
     std::error_code ec;
     if (!stdfs::is_directory(root, ec)) {
         LOG_W("mods: pack folder %s not found", PATH_STR(root).c_str());
@@ -104,6 +100,13 @@ void add_pack(PackIndex& ix, const char* env_name, const char* env_dir, const ch
           n_loose);
 }
 
+void add_pack(PackIndex& ix, const char* env_name, const char* env_dir, const char* def_dir) {
+    const char* pack = getenv(env_name);
+    if (!pack || !*pack) return;
+    const char* dir = getenv(env_dir);
+    add_pack_folder(ix, pack, stdfs::u8path(dir && *dir ? dir : def_dir) / stdfs::u8path(pack));
+}
+
 stdfs::path season_pack_root() {
     const char* pack = getenv("F1CE_MOD_PACK");
     if (!pack || !*pack) return {};
@@ -114,6 +117,16 @@ stdfs::path season_pack_root() {
 PackIndex build_index() {
     PackIndex ix;
     add_pack(ix, "F1CE_MOD_PACK", "F1CE_MODS_DIR", "MODS");
+    if (const char* enabled = getenv("F1CE_SLICK_TEXTURES"); enabled && strcmp(enabled, "1") == 0) {
+        const char* dir = getenv("F1CE_MODS_DIR");
+        const auto mods_dir = stdfs::u8path(dir && *dir ? dir : "MODS");
+        const auto installed = mods_dir / "SLICK_TEXTURES";
+        // In a source checkout the generator writes next to the test scripts, not the build.
+        const auto generated = mods_dir / ".." / ".." / "Slick-Test" / "MODS" / "SLICK_TEXTURES";
+        std::error_code ec;
+        const auto source = stdfs::is_directory(installed, ec) ? installed : generated.lexically_normal();
+        add_pack_folder(ix, "SLICK_TEXTURES", source);
+    }
     add_pack(ix, "F1CE_HELMET_PACK", "F1CE_HELMETS_DIR", "PLAYER_HELMETS");
     return ix;
 }

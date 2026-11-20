@@ -23,15 +23,17 @@ if /i "%~1"=="2026" set "F1CE_SLICK_TEST=2026"
 if /i "%~1"=="handling" set "F1CE_SLICK_TEST=2026"
 if /i "%TEST_EXE%"=="f1ce-slick-handling.exe" set "F1CE_SLICK_TEST=handling"
 set "F1CE_MOD_PACK="
+set "F1CE_SLICK_TEXTURES="
 if /i "%~2"=="textures" (
     if not exist "%~dp0MODS\SLICK_TEXTURES\offline.wad\" (
         echo Generate SLICK_TEXTURES first. See README.md.
         pause
         exit /b 1
     )
-    set "F1CE_MOD_PACK=SLICK_TEXTURES"
+    set "F1CE_SLICK_TEXTURES=1"
     set "F1CE_MODS_DIR=%~dp0MODS"
 )
+if defined F1CE_SLICK_TEXTURES if /i not "%TEST_EXE%"=="..\build-win\f1ce.exe" set "F1CE_MOD_PACK=SLICK_TEXTURES"
 set "F1CE_RENDERER=vulkan"
 set "F1CE_SKIP_INTRO=1"
 set "F1CE_FULLSCREEN=0"

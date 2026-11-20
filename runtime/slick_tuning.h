@@ -30,6 +30,17 @@ inline float pad_steer(float x, float kmh) {
     return x * (small + (1.0f - small) * x * x) * (1.0f - 0.22f * fast);
 }
 
+struct AxleGrip { float front, rear; };
+
+inline AxleGrip modern_grip(float kmh) {
+    const float speed = std::clamp(kmh, 0.0f, 240.0f);
+    const float aero = 0.06f * speed * speed / (240.0f * 240.0f);
+    const float blend = std::clamp((speed - 20.0f) / 180.0f, 0.0f, 1.0f);
+    const float balance = blend * blend * (3.0f - 2.0f * blend);
+    const float base = 1.10f + aero;
+    return {base * (1.0f + 0.015f * (1.0f - balance)), base * (1.0f + 0.015f * balance)};
+}
+
 // One update per stock physics substep (three per 60 Hz simulation tick).
 // Cut extra torque in ~45 ms, rebuild it in ~180 ms. Never retain boost above
 // the current throttle/speed ceiling, and immediately drop it when ineligible.
@@ -74,4 +85,5 @@ inline float compound_grip(Compound compound, float wear) {
 float player_speed_kmh();
 bool telemetry_enabled();
 void telemetry_pad_axis(unsigned lx);
+bool physics_eligible(unsigned car);
 }

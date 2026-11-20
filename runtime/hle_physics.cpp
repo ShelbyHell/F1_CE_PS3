@@ -16,10 +16,13 @@
 
 // Experimental single-player slick preset. Only the tyre state and realistic
 // wear mode observed in the stock dry Quick Race are eligible.
+bool slick::physics_eligible(unsigned car) {
+    return ((ld32(car + 0x5f0) >> 12) & 3) == 0 && ld32(car + 0x964) == 2;
+}
+
 static slick::Preset slick_test_car(u32 car) {
     const auto preset = slick::selected_preset();
-    return preset != slick::Preset::stock && ((ld32(car + 0x5f0) >> 12) & 3) == 0 && ld32(car + 0x964) == 2
-               ? preset : slick::Preset::stock;
+    return preset != slick::Preset::stock && slick::physics_eligible(car) ? preset : slick::Preset::stock;
 }
 
 void slick_wear_probe(PPUContext& c) {
@@ -39,11 +42,9 @@ void slick_grip_probe(PPUContext& c) {
     // This vector is computed afresh, then stored at car + 0x4d0.
     float front = 1.05f, rear = 1.05f;
     if (preset == slick::Preset::modern && speed >= 0.0f) {
-        const float above_90 = speed * 3.6f - 90.0f;
-        const float base = 1.14f - 0.06f * std::clamp(above_90 / 170.0f, 0.0f, 1.0f);
-        const float fast = std::clamp(above_90 / 120.0f, 0.0f, 1.0f);
-        front = base + 0.025f * (1.0f - fast);
-        rear = base + 0.025f * fast;
+        const auto balance = slick::modern_grip(speed * 3.6f);
+        front = balance.front;
+        rear = balance.rear;
     }
     const auto compound = slick::selected_compound();
     // Guest lanes 0/1 are the front axle; VMX stores lane 0 at f[3].

@@ -114,6 +114,8 @@ std::vector<Option> make_options() {
                        0, "The game's language when its language menu is skipped; otherwise the one the menu starts on."));
     v.push_back(choice(GENERAL, "Season pack", "F1CE_MOD_PACK", {{"None (original game)", nullptr}}, 0,
                        "The folders of MODS next to the launcher: a pack replaces the game's files with its own."));
+    v.push_back(toggle(GENERAL, "Slick tread textures", "F1CE_SLICK_TEXTURES",
+                       "Apply the generated SLICK_TEXTURES pack on top of the season pack. Only dry tread maps are replaced."));
     v.push_back(choice(GENERAL, "Player helmets", "F1CE_HELMET_PACK", {{"Original", nullptr}}, 0,
                        "The folders of PLAYER_HELMETS next to the launcher: your own helmet designs for the profile, "
                        "used with every season pack."));

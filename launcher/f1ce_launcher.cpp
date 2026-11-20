@@ -146,6 +146,8 @@ Combo g_combos[] = {
       {L"Español", L"spanish"}, {L"Português", L"portuguese"}, {L"Suomi", L"finnish"}}, 0, GAME},
     // the folders of MODS next to the launcher, added at start (add_season_packs; runtime/mods.cpp)
     {L"Season pack (MODS folder)", L"F1CE_MOD_PACK", {{L"None (original game)", nullptr}}, 0, GAME},
+    {L"Slick tread textures", L"F1CE_SLICK_TEXTURES", {{L"Off", nullptr}, {L"On", L"1"}}, 0, GAME,
+     L"Apply the generated SLICK_TEXTURES pack on top of the season pack. Only dry tread maps are replaced."},
     // the folders of PLAYER_HELMETS next to the launcher: the profile's helmet designs, over any season pack
     {L"Player helmets", L"F1CE_HELMET_PACK", {{L"Original", nullptr}}, 0, GAME},
     // Quick Race Settings (runtime/hle_quickrace.cpp): "Game menu" leaves the variable unset
