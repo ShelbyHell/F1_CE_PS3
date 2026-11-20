@@ -520,10 +520,10 @@ void draw_tyre_hud(ImDrawList* dl, float W, float H) {
     if (!car) return;
 
     const float S = std::clamp(H / 720.0f, 0.70f, 1.40f);
-    const float box_w = 186.0f * S, box_h = 142.0f * S;
+    const float box_w = 186.0f * S, box_h = 138.0f * S;
     const float pad_right = 24.0f * S;
-    // Positioned directly above the in-game speedometer/rev-counter cluster
-    const float pad_bottom = 205.0f * S;
+    // Positioned cleanly ABOVE the tachometer/speedometer cluster (top of rev dial is ~375 in 720p)
+    const float pad_bottom = 365.0f * S;
     const float x0 = W - box_w - pad_right, y0 = H - box_h - pad_bottom;
     const float x1 = x0 + box_w, y1 = y0 + box_h;
 
@@ -549,29 +549,47 @@ void draw_tyre_hud(ImDrawList* dl, float W, float H) {
     const float s_txt_w = text_w(F.black, 10.5f * S, "SIEMENS");
     text(dl, F.black, 10.5f * S, ImVec2(x0 + (badge_w - s_txt_w) * 0.45f, y0 + 5.0f * S), TEXT_WHITE, "SIEMENS");
 
-    // Header title & tyre compound tag
+    // Header title & tyre compound pill
     const auto compound = slick::selected_compound();
-    const char* c_name = compound == slick::Compound::soft ? "SOFT" : compound == slick::Compound::hard ? "HARD" : "TYRES";
-    const ImU32 c_col = compound == slick::Compound::soft ? IM_COL32(235, 45, 45, 255)
-                      : compound == slick::Compound::hard ? IM_COL32(240, 240, 240, 255)
-                      : SIEMENS_CYAN;
+    const char* c_name = compound == slick::Compound::soft ? "SOFT" : compound == slick::Compound::hard ? "HARD" : "SLICK";
+    const ImU32 comp_bg = compound == slick::Compound::soft ? IM_COL32(220, 35, 35, 240)
+                        : compound == slick::Compound::hard ? IM_COL32(230, 235, 240, 240)
+                        : IM_COL32(0, 140, 150, 240);
+    const ImU32 comp_txt_col = compound == slick::Compound::hard ? IM_COL32(20, 25, 30, 255) : TEXT_WHITE;
 
-    text(dl, F.semi, 10.5f * S, ImVec2(x0 + badge_w + 12.0f * S, y0 + 5.0f * S), c_col, c_name);
+    const float comp_x = x0 + badge_w + 10.0f * S;
+    const float comp_w = 46.0f * S, comp_h = 15.0f * S;
+    const float comp_y = y0 + 3.5f * S;
+    dl->AddRectFilled(ImVec2(comp_x, comp_y), ImVec2(comp_x + comp_w, comp_y + comp_h), comp_bg, 3.0f * S);
+    const float c_txt_w = text_w(F.semi, 9.5f * S, c_name);
+    text(dl, F.semi, 9.5f * S, ImVec2(comp_x + (comp_w - c_txt_w) * 0.5f, comp_y + 2.0f * S), comp_txt_col, c_name);
+
+    text(dl, F.semi, 10.0f * S, ImVec2(comp_x + comp_w + 8.0f * S, y0 + 5.0f * S), SIEMENS_CYAN, "TYRES");
 
     // Thin cyan accent dividing line under the header
     dl->AddLine(ImVec2(x0, y0 + 22.0f * S), ImVec2(x1, y0 + 22.0f * S), SIEMENS_CYAN, 1.2f * S);
 
-    // Center area: F1 chassis silhouette & tyre pods
+    // Center area: F1 chassis blueprint & tyre pods
     const float cx = x0 + box_w * 0.5f;
-    const float f_y = y0 + 29.0f * S, r_y = y0 + 69.0f * S;
+    const float f_y = y0 + 28.0f * S, r_y = y0 + 67.0f * S;
     const float tw = 32.0f * S, th = 35.0f * S;
     const float fl_x = cx - tw - 13.0f * S, fr_x = cx + 13.0f * S;
 
-    // Stylized broadcast chassis lines
-    dl->AddLine(ImVec2(cx - 20.0f * S, f_y + 3.0f * S), ImVec2(cx + 20.0f * S, f_y + 3.0f * S), IM_COL32(75, 88, 100, 180), 2.0f * S);
-    dl->AddLine(ImVec2(cx, f_y + 1.0f * S), ImVec2(cx, r_y + th - 2.0f * S), IM_COL32(80, 95, 110, 200), 2.0f * S);
-    dl->AddCircle(ImVec2(cx, (f_y + r_y) * 0.5f + 2.0f * S), 4.5f * S, IM_COL32(70, 85, 95, 180), 12, 1.5f * S);
-    dl->AddLine(ImVec2(cx - 18.0f * S, r_y + th - 3.0f * S), ImVec2(cx + 18.0f * S, r_y + th - 3.0f * S), IM_COL32(75, 88, 100, 180), 2.0f * S);
+    // Stylized broadcast chassis lines with endplates
+    const ImU32 CHASSIS_COL = IM_COL32(140, 165, 185, 220);
+    // Front wing & endplates
+    dl->AddLine(ImVec2(cx - 24.0f * S, f_y + 3.0f * S), ImVec2(cx + 24.0f * S, f_y + 3.0f * S), CHASSIS_COL, 2.0f * S);
+    dl->AddLine(ImVec2(cx - 24.0f * S, f_y - 1.0f * S), ImVec2(cx - 24.0f * S, f_y + 7.0f * S), CHASSIS_COL, 1.5f * S);
+    dl->AddLine(ImVec2(cx + 24.0f * S, f_y - 1.0f * S), ImVec2(cx + 24.0f * S, f_y + 7.0f * S), CHASSIS_COL, 1.5f * S);
+    // Central monocoque spine
+    dl->AddLine(ImVec2(cx, f_y), ImVec2(cx, r_y + th - 1.0f * S), CHASSIS_COL, 2.0f * S);
+    // Cockpit ring & helmet
+    dl->AddCircle(ImVec2(cx, (f_y + r_y) * 0.5f + 2.0f * S), 5.0f * S, IM_COL32(120, 145, 165, 200), 16, 1.5f * S);
+    dl->AddCircleFilled(ImVec2(cx, (f_y + r_y) * 0.5f + 2.0f * S), 2.5f * S, IM_COL32(160, 180, 200, 220));
+    // Rear wing & endplates
+    dl->AddLine(ImVec2(cx - 22.0f * S, r_y + th - 3.0f * S), ImVec2(cx + 22.0f * S, r_y + th - 3.0f * S), CHASSIS_COL, 2.0f * S);
+    dl->AddLine(ImVec2(cx - 22.0f * S, r_y + th - 7.0f * S), ImVec2(cx - 22.0f * S, r_y + th + 1.0f * S), CHASSIS_COL, 1.5f * S);
+    dl->AddLine(ImVec2(cx + 22.0f * S, r_y + th - 7.0f * S), ImVec2(cx + 22.0f * S, r_y + th + 1.0f * S), CHASSIS_COL, 1.5f * S);
 
     // 4 Tyre Pods
     const float xs[4] = {fl_x, fr_x, fl_x, fr_x};
@@ -628,11 +646,11 @@ void draw_tyre_hud(ImDrawList* dl, float W, float H) {
     }
 
     // Footer divider line
-    dl->AddLine(ImVec2(x0 + 6.0f * S, y0 + 110.0f * S), ImVec2(x1 - 6.0f * S, y0 + 110.0f * S), IM_COL32(35, 48, 56, 200), 1.0f);
+    dl->AddLine(ImVec2(x0 + 6.0f * S, y0 + 107.0f * S), ImVec2(x1 - 6.0f * S, y0 + 107.0f * S), IM_COL32(35, 48, 56, 200), 1.0f);
 
     // Footer badges: Aerodynamic status (Left) & Brake Bias (Right)
     const auto wake = slick::current_wake();
-    const float pill_y = y0 + 114.0f * S, pill_h = 20.0f * S;
+    const float pill_y = y0 + 111.0f * S, pill_h = 20.0f * S;
 
     // Aero Wake Badge
     const float aero_x = x0 + 8.0f * S, aero_w = 94.0f * S;
