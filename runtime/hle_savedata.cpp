@@ -42,7 +42,7 @@ std::mutex g_save_mutex;   // one save operation at a time (also protects the sc
 u32 g_scratch = 0;         // guest scratch memory for the structures handed to callbacks
 
 stdfs::path save_root() {
-    return stdfs::u8path(g_data_dir) / "dev_hdd0" / "home" / "00000001" / "savedata";
+    return stdfs::path(g_data_dir) / "dev_hdd0" / "home" / "00000001" / "savedata";
 }
 
 std::vector<std::string> split_prefixes(const std::string& s) {
@@ -80,7 +80,7 @@ s64 epoch_seconds(stdfs::file_time_type t) {
 DirInfo dir_info(const std::string& name) {
     DirInfo d;
     d.name = name;
-    const stdfs::path path = save_root() / stdfs::u8path(name);
+    const stdfs::path path = save_root() / stdfs::path(name);
     std::error_code ec;
     for (auto& e : stdfs::directory_iterator(path, ec)) {
         if (!e.is_regular_file(ec) || e.path().extension() == ".tmp") continue;
@@ -131,7 +131,7 @@ overlay::SaveEntry save_entry(const DirInfo& d) {
     if (e.title.empty()) e.title = d.name;
     e.mtime = d.mtime;
     e.size = d.size;
-    read_file(save_root() / stdfs::u8path(d.name) / "ICON0.PNG", e.icon_png);
+    read_file(save_root() / stdfs::path(d.name) / "ICON0.PNG", e.icon_png);
     return e;
 }
 
@@ -144,7 +144,7 @@ struct SaveOp {
 
 // status + file phases for one selected directory
 s32 run_dir(PPUContext& c, const SaveOp& op, const std::string& dir, bool is_new) {
-    stdfs::path path = save_root() / stdfs::u8path(dir);
+    stdfs::path path = save_root() / stdfs::path(dir);
     std::error_code ec;
     if (!op.save && !stdfs::is_directory(path, ec)) return ERROR_NODATA;
     u32 res = g_scratch, stat_get = g_scratch + 0x40, stat_set = g_scratch + 0x800;
@@ -219,7 +219,7 @@ s32 run_dir(PPUContext& c, const SaveOp& op, const std::string& dir, bool is_new
             static const char* names[] = {"", "", "ICON0.PNG", "ICON1.PAM", "PIC1.PNG", "SND0.AT3"};
             name = names[std::min<u32>(ftype, 5)];
         }
-        stdfs::path fp = path / stdfs::u8path(name);
+        stdfs::path fp = path / stdfs::path(name);
         u32 done = 0;
         switch (fop) {
             case OP_READ: {
@@ -355,7 +355,7 @@ s32 run_auto(PPUContext& c, bool save, const std::string& dir, u32 set_buf, u32 
     std::lock_guard lk(g_save_mutex);
     if (!g_scratch) g_scratch = mem::alloc(0x1000, 128);
     std::error_code ec;
-    bool exists = stdfs::is_directory(save_root() / stdfs::u8path(dir), ec);
+    bool exists = stdfs::is_directory(save_root() / stdfs::path(dir), ec);
     LOG_I("savedata: auto %s '%s' (%s)", save ? "save" : "load", dir.c_str(), exists ? "exists" : "new");
     return run_dir(c, {save, set_buf, func_stat, func_file, userdata}, dir, !exists);
 }
@@ -366,7 +366,7 @@ s32 run_delete() {
     const auto dirs = list_dirs(g_title_id, 0, 0);   // (newest first)
     std::vector<overlay::SaveEntry> entries;
     for (auto& d : dirs) entries.push_back(save_entry(d));
-    if (entries.empty()) return overlay::message("There is no saved data.") ? RET_CANCEL : CELL_OK;
+    if (entries.empty()) return overlay::message("There is no saved data.") ? (s32)RET_CANCEL : (s32)CELL_OK;
     const int pick = overlay::save_list(overlay::SaveMode::Delete, entries, 0);
     if (pick == overlay::UNAVAILABLE) {
         LOG_W("savedata: delete needs the save data dialog; nothing deleted");
@@ -374,7 +374,7 @@ s32 run_delete() {
     }
     if (pick < 0) return RET_CANCEL;
     std::error_code ec;
-    stdfs::remove_all(save_root() / stdfs::u8path(entries[pick].dir), ec);
+    stdfs::remove_all(save_root() / stdfs::path(entries[pick].dir), ec);
     if (ec) LOG_E("savedata: cannot delete '%s': %s", entries[pick].dir.c_str(), ec.message().c_str());
     else LOG_I("savedata: deleted '%s'", entries[pick].dir.c_str());
     return CELL_OK;

@@ -1,6 +1,7 @@
 // Core runtime interface shared by the generated PPU code and the HLE/LV2 layers.
 #pragma once
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -49,8 +50,8 @@ FORCE_INLINE u64 ld64le(u32 ea) { u64 v; memcpy(&v, gmem(ea), 8); return v; }
 FORCE_INLINE void st16le(u32 ea, u16 v) { memcpy(gmem(ea), &v, 2); }
 FORCE_INLINE void st32le(u32 ea, u32 v) { memcpy(gmem(ea), &v, 4); }
 FORCE_INLINE void st64le(u32 ea, u64 v) { memcpy(gmem(ea), &v, 8); }
-FORCE_INLINE float ldf32(u32 ea) { u32 v = ld32(ea); float f; memcpy(&f, &v, 4); return f; }
-FORCE_INLINE void stf32(u32 ea, float f) { u32 v; memcpy(&v, &f, 4); st32(ea, v); }
+FORCE_INLINE float ldf32(u32 ea) { return std::bit_cast<float>(ld32(ea)); }
+FORCE_INLINE void stf32(u32 ea, float f) { st32(ea, std::bit_cast<u32>(f)); }
 
 // Big-endian value stored in guest memory (for HLE structure definitions).
 template <typename T>
@@ -122,8 +123,10 @@ void ppu_spin(PPUContext& c);   // core.cpp
 extern std::atomic<u32> g_line_waiters;
 void guest_written_slow(u32 ea, u32 size);
 FORCE_INLINE void guest_written(u32 ea, u32 size) {
-    std::atomic_thread_fence(std::memory_order_seq_cst);   // (the write before, the registration check after)
-    if (__builtin_expect(g_line_waiters.load(std::memory_order_relaxed) != 0, 0)) guest_written_slow(ea, size);
+    if (__builtin_expect(g_line_waiters.load(std::memory_order_acquire) != 0, 0)) {
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        guest_written_slow(ea, size);
+    }
 }
 struct LineWait {   // one per wait site; the slot it registers in belongs to the thread (one active wait per thread)
     u32 line0 = ~0u, line1 = ~0u;

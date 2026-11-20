@@ -150,7 +150,7 @@ const u32 g_spu_aot_cluster_count = 0;
 endif()
 add_library(spu_aot OBJECT ${SPU_AOT_SOURCES})
 target_include_directories(spu_aot PRIVATE runtime generated)
-target_compile_options(spu_aot PRIVATE ${ARCH_FLAGS} -O2 -fno-strict-aliasing -fwrapv -Wno-unused-function)
+target_compile_options(spu_aot PRIVATE ${ARCH_FLAGS} -O3 -fno-strict-aliasing -fwrapv -Wno-unused-function)
 
 # The runtime is shared by the game (f1ce: EBOOT.BIN) and the multiplayer executable the game exitspawns into
 # (f1ce_online: ONLINE.BIN, translated by 'tools/recomp.py online' into generated_online; built when that exists).

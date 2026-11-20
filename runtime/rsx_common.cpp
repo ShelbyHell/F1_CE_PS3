@@ -810,7 +810,7 @@ std::string shader_cache_dir() {
             if (slash != std::string::npos) d = s.substr(0, slash + 1) + "shader_cache";
         }
         std::error_code ec;
-        std::filesystem::create_directories(std::filesystem::u8path(d), ec);
+        std::filesystem::create_directories(std::filesystem::path(d), ec);
         return d;
     }();
     return dir;

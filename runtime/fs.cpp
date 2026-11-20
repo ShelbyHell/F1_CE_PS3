@@ -66,7 +66,7 @@ void write_stat(u32 out, bool dir, u64 size) {
 
 FILE* fopen_u8(const std::string& path, const char* mode) {
 #ifdef _WIN32
-    return _wfopen(stdfs::u8path(path).wstring().c_str(), std::wstring(mode, mode + strlen(mode)).c_str());
+    return _wfopen(stdfs::path(path).wstring().c_str(), std::wstring(mode, mode + strlen(mode)).c_str());
 #else
     return fopen(path.c_str(), mode);
 #endif
@@ -74,15 +74,15 @@ FILE* fopen_u8(const std::string& path, const char* mode) {
 
 std::string fs_host_path(const std::string& g) {
     auto starts = [&](const char* p) { return g.rfind(p, 0) == 0; };
-    stdfs::path game = stdfs::u8path(g_game_dir);
+    stdfs::path game = stdfs::path(g_game_dir);
     stdfs::path out;
-    if (starts("/app_home/")) out = game / "USRDIR" / stdfs::u8path(g.substr(10));
-    else if (starts("/dev_bdvd/PS3_GAME/")) out = game / stdfs::u8path(g.substr(19));
-    else if (starts("/dev_bdvd/")) out = game.parent_path() / stdfs::u8path(g.substr(10));
-    else if (starts("/host_root/")) out = game / "USRDIR" / stdfs::u8path(g.substr(11));
+    if (starts("/app_home/")) out = game / "USRDIR" / stdfs::path(g.substr(10));
+    else if (starts("/dev_bdvd/PS3_GAME/")) out = game / stdfs::path(g.substr(19));
+    else if (starts("/dev_bdvd/")) out = game.parent_path() / stdfs::path(g.substr(10));
+    else if (starts("/host_root/")) out = game / "USRDIR" / stdfs::path(g.substr(11));
     else if (starts("/dev_hdd0/") || starts("/dev_hdd1/") || starts("/dev_usb000/"))
-        out = stdfs::u8path(g_data_dir) / stdfs::u8path(g.substr(1));
-    else out = game / "USRDIR" / stdfs::u8path(g[0] == '/' ? g.substr(1) : g);
+        out = stdfs::path(g_data_dir) / stdfs::path(g.substr(1));
+    else out = game / "USRDIR" / stdfs::path(g[0] == '/' ? g.substr(1) : g);
     return PATH_STR(resolve_case(out.lexically_normal()));
 }
 
@@ -90,7 +90,7 @@ namespace fs {
 
 s32 open(const std::string& path, s32 flags, u32 fd_out) {
     std::string host = fs_host_path(path);
-    stdfs::path hp = stdfs::u8path(host);
+    stdfs::path hp = stdfs::path(host);
     bool exists = stdfs::exists(hp);
     if (exists && stdfs::is_directory(hp)) return CELL_EISDIR;
     if (!exists && !(flags & O_CREAT)) {
@@ -106,7 +106,7 @@ s32 open(const std::string& path, s32 flags, u32 fd_out) {
         if (!env.empty()) repl = env;
         if (!repl.empty()) {
             host = repl;
-            hp = stdfs::u8path(host);
+            hp = stdfs::path(host);
         }
         if (std::shared_ptr<mods::VirtualFile> vf = mods::open_wad(host)) {
             std::lock_guard lk(g_fs_mutex);
@@ -194,7 +194,7 @@ s32 lseek(u32 fd, s64 offset, u32 whence, u32 pos_out) {
 
 s32 stat(const std::string& path, u32 out) {
     std::string host = fs_host_path(path);
-    stdfs::path hp = stdfs::u8path(host);
+    stdfs::path hp = stdfs::path(host);
     std::error_code ec;
     if (!stdfs::exists(hp, ec)) return CELL_ENOENT;
     bool dir = stdfs::is_directory(hp, ec);
@@ -202,7 +202,7 @@ s32 stat(const std::string& path, u32 out) {
         std::string repl = mods::loose_override(host);
         std::string env = environment_override(host, repl.empty() ? host : repl);
         if (!env.empty()) repl = env;
-        if (!repl.empty()) hp = stdfs::u8path(host = repl);
+        if (!repl.empty()) hp = stdfs::path(host = repl);
         if (s64 vs = mods::wad_size(host); vs >= 0) {
             write_stat(out, false, (u64)vs);
             return CELL_OK;
@@ -229,7 +229,7 @@ s32 fstat(u32 fd, u32 out) {
 }
 
 s32 opendir(const std::string& path, u32 fd_out) {
-    stdfs::path hp = stdfs::u8path(fs_host_path(path));
+    stdfs::path hp = stdfs::path(fs_host_path(path));
     std::error_code ec;
     if (!stdfs::is_directory(hp, ec)) return CELL_ENOENT;
     Dir d;
@@ -268,25 +268,25 @@ s32 closedir(u32 fd) {
 
 s32 mkdir(const std::string& path) {
     std::error_code ec;
-    stdfs::path hp = stdfs::u8path(fs_host_path(path));
+    stdfs::path hp = stdfs::path(fs_host_path(path));
     if (stdfs::exists(hp, ec)) return CELL_EEXIST;
     stdfs::create_directories(hp, ec);
     return ec ? CELL_EPERM : CELL_OK;
 }
 s32 rename(const std::string& from, const std::string& to) {
     std::error_code ec;
-    stdfs::rename(stdfs::u8path(fs_host_path(from)), stdfs::u8path(fs_host_path(to)), ec);
+    stdfs::rename(stdfs::path(fs_host_path(from)), stdfs::path(fs_host_path(to)), ec);
     return ec ? CELL_ENOENT : CELL_OK;
 }
 s32 rmdir(const std::string& path) {
     std::error_code ec;
-    stdfs::remove(stdfs::u8path(fs_host_path(path)), ec);
+    stdfs::remove(stdfs::path(fs_host_path(path)), ec);
     return ec ? CELL_ENOENT : CELL_OK;
 }
 s32 unlink(const std::string& path) { return rmdir(path); }
 s32 truncate(const std::string& path, u64 size) {
     std::error_code ec;
-    stdfs::resize_file(stdfs::u8path(fs_host_path(path)), size, ec);
+    stdfs::resize_file(stdfs::path(fs_host_path(path)), size, ec);
     return ec ? CELL_ENOENT : CELL_OK;
 }
 s32 ftruncate(u32 fd, u64 size) {

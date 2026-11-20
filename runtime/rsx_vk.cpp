@@ -846,7 +846,7 @@ std::string vk_cache_dir() {
     static const std::string d = [] {
         std::string p = shader_cache_dir() + "/vk";
         std::error_code ec;
-        std::filesystem::create_directories(std::filesystem::u8path(p), ec);
+        std::filesystem::create_directories(std::filesystem::path(p), ec);
         return p;
     }();
     return d;
@@ -1001,8 +1001,8 @@ void save_pipeline_cache() {
         fwrite(d.data(), 1, n, f);
         fclose(f);
         std::error_code ec;
-        std::filesystem::remove(std::filesystem::u8path(path), ec);
-        std::filesystem::rename(std::filesystem::u8path(tmp), std::filesystem::u8path(path), ec);
+        std::filesystem::remove(std::filesystem::path(path), ec);
+        std::filesystem::rename(std::filesystem::path(tmp), std::filesystem::path(path), ec);
     }
     g_pcache_dirty = false;
 }

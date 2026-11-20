@@ -25,7 +25,7 @@ std::string g_title_id = "UNKNOWN00";
 
 // PARAM.SFO: little-endian key/value table; we only need TITLE_ID.
 static void read_title_id(const std::string& sfo_path) {
-    std::ifstream f(std::filesystem::u8path(sfo_path), std::ios::binary);
+    std::ifstream f(std::filesystem::path(sfo_path), std::ios::binary);
     std::vector<u8> d((std::istreambuf_iterator<char>(f)), {});
     if (d.size() < 20 || memcmp(d.data(), "\0PSF", 4)) return;
     auto le32 = [&](size_t o) { u32 v; memcpy(&v, &d[o], 4); return v; };
@@ -113,10 +113,10 @@ bool spawn_sibling(const char* stem, const std::string& game, const std::vector<
 #endif
     const std::string mine = PATH_STR(me.stem());
     const std::string base = g_online_image ? "f1ce_online" : "f1ce";
-    fs::path exe = me.parent_path() / fs::u8path(std::string(stem));
+    fs::path exe = me.parent_path() / fs::path(std::string(stem));
     exe += ext;
     if (mine.size() > base.size() && mine.compare(0, base.size(), base) == 0) {   // keep a suffix
-        fs::path alt = me.parent_path() / fs::u8path(std::string(stem) + mine.substr(base.size()));
+        fs::path alt = me.parent_path() / fs::path(std::string(stem) + mine.substr(base.size()));
         alt += ext;
         if (fs::exists(alt)) exe = alt;
     }
@@ -128,7 +128,7 @@ bool spawn_sibling(const char* stem, const std::string& game, const std::vector<
     // CommandLineToArgvW quoting: backslashes double only before a quote
     std::wstring cmd;
     for (const std::string& a : argv) {
-        const std::wstring w = fs::u8path(a).wstring();
+        const std::wstring w = fs::path(a).wstring();
         if (!cmd.empty()) cmd += L' ';
         cmd += L'"';
         size_t bs = 0;
@@ -188,18 +188,18 @@ int main(int argc, char** argv) {
         else if (a == "--guest-arg" && i + 1 < argc) guest_args.push_back(args[++i]);
         else game = a;
     }
-    if (!fs::exists(fs::u8path(game) / "USRDIR"))
+    if (!fs::exists(fs::path(game) / "USRDIR"))
         fatal("PS3_GAME folder not found at '%s'. Pass it as first argument.", game.c_str());
     // the disc's EBOOT.BIN, decrypted here (or a checked EBOOT.elf)
     std::vector<u8> elf;
-    if (const std::string e = eboot::load(fs::u8path(game), elf, g_online_image ? "ONLINE" : "EBOOT"); !e.empty())
+    if (const std::string e = eboot::load(fs::path(game), elf, g_online_image ? "ONLINE" : "EBOOT"); !e.empty())
         fatal("%s\n\nGame folder: %s", e.c_str(), game.c_str());
-    g_game_dir = PATH_STR(fs::absolute(fs::u8path(game)));
+    g_game_dir = PATH_STR(fs::absolute(fs::path(game)));
     g_data_dir = PATH_STR(fs::current_path() / "ps3_data");
-    fs::create_directories(fs::u8path(g_data_dir) / "dev_hdd0" / "game");
+    fs::create_directories(fs::path(g_data_dir) / "dev_hdd0" / "game");
     LOG_I("F1 Championship Edition static recompilation - game dir: %s", g_game_dir.c_str());
 
-    read_title_id(PATH_STR(fs::u8path(g_game_dir) / "PARAM.SFO"));
+    read_title_id(PATH_STR(fs::path(g_game_dir) / "PARAM.SFO"));
     host::init();
     mem::init();
     extern void start_watchdog(u32);

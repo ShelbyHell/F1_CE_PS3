@@ -48,7 +48,7 @@ Choice choice_for(bool dawn) {
     if (!strcmp(e, "afternoon")) { c.flag = 0; return c; }
     if (!strcmp(e, "sunset")) { c.flag = 1; return c; }
     const char* dir = getenv("F1CE_ENV_DIR");
-    c.preset = stdfs::u8path(dir && *dir ? dir : "ENVIRONMENTS") / stdfs::u8path(e);
+    c.preset = stdfs::path(dir && *dir ? dir : "ENVIRONMENTS") / stdfs::path(e);
     std::error_code ec;
     if (!stdfs::is_directory(c.preset, ec)) {
         LOG_W("environment: preset folder %s not found", PATH_STR(c.preset).c_str());
@@ -125,7 +125,7 @@ bool environment_sky_hook(PPUContext& c) { return environment_hook(c, false); }
 // fs.cpp, before opening a game file for reading: `src` is the file to read (the track's own or the season pack's),
 // `host` its path in USRDIR. Returns the merged file to read instead, or empty.
 std::string environment_override(const std::string& host, const std::string& src) {
-    const stdfs::path hp = stdfs::u8path(host);
+    const stdfs::path hp = stdfs::path(host);
     std::string name = lower(PATH_STR(hp.filename()));
     if (name.rfind("tt_", 0) == 0) name = name.substr(3);
     if (name != "environmentsettings.txt" && name != "posteffects.txt") return {};
@@ -139,7 +139,7 @@ std::string environment_override(const std::string& host, const std::string& src
     }
     const char* file = name == "posteffects.txt" ? "PostEffects.txt" : "EnvironmentSettings.txt";
     bool found;
-    Lines lines = parse(stdfs::u8path(src), found);
+    Lines lines = parse(stdfs::path(src), found);
     if (!found) return {};
     apply(lines, ch.preset / file, file);
     // per-track files: the folder name as in USRDIR/tracks, any case
