@@ -40,10 +40,38 @@ void watch_store(u32 ea, u64 value, u32 size);
 #else
 #define WATCH_STORE(ea, v, sz) ((void)0)
 #endif
+
+// Blocking waits on guest memory (core.cpp).
+extern std::atomic<u32> g_line_waiters;
+extern std::atomic<u32> g_rsx_acquire_ea;
+void guest_written_slow(u32 ea, u32 size);
+FORCE_INLINE void guest_written(u32 ea, u32 size) {
+    if (__builtin_expect(g_line_waiters.load(std::memory_order_acquire) != 0, 0)) {
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        guest_written_slow(ea, size);
+    }
+}
+
 FORCE_INLINE void st8(u32 ea, u8 v) { WATCH_STORE(ea, v, 1); *gmem(ea) = v; }
 FORCE_INLINE void st16(u32 ea, u16 v) { WATCH_STORE(ea, v, 2); v = __builtin_bswap16(v); memcpy(gmem(ea), &v, 2); }
-FORCE_INLINE void st32(u32 ea, u32 v) { WATCH_STORE(ea, v, 4); v = __builtin_bswap32(v); memcpy(gmem(ea), &v, 4); }
-FORCE_INLINE void st64(u32 ea, u64 v) { WATCH_STORE(ea, v, 8); v = __builtin_bswap64(v); memcpy(gmem(ea), &v, 8); }
+FORCE_INLINE void st32(u32 ea, u32 v) {
+    WATCH_STORE(ea, v, 4);
+    v = __builtin_bswap32(v);
+    memcpy(gmem(ea), &v, 4);
+    const u32 acq = g_rsx_acquire_ea.load(std::memory_order_relaxed);
+    if (__builtin_expect(acq != 0 && ((ea ^ acq) < 128), 0)) {
+        guest_written(ea, 4);
+    }
+}
+FORCE_INLINE void st64(u32 ea, u64 v) {
+    WATCH_STORE(ea, v, 8);
+    v = __builtin_bswap64(v);
+    memcpy(gmem(ea), &v, 8);
+    const u32 acq = g_rsx_acquire_ea.load(std::memory_order_relaxed);
+    if (__builtin_expect(acq != 0 && ((ea ^ acq) < 128), 0)) {
+        guest_written(ea, 8);
+    }
+}
 FORCE_INLINE u16 ld16le(u32 ea) { u16 v; memcpy(&v, gmem(ea), 2); return v; }
 FORCE_INLINE u32 ld32le(u32 ea) { u32 v; memcpy(&v, gmem(ea), 4); return v; }
 FORCE_INLINE u64 ld64le(u32 ea) { u64 v; memcpy(&v, gmem(ea), 8); return v; }
@@ -117,17 +145,8 @@ struct PPUContext {
 void ppu_spin(PPUContext& c);   // core.cpp
 #define PPU_SPIN() ppu_spin(c)
 
-// Blocking waits on guest memory (core.cpp). A waiting thread registers up to two 128-byte lines; writers of guest memory
-// from other threads (SPU DMA puts and atomics, PPU atomics, HLE updates: everything that calls line_written) call
-// guest_written, which wakes the waiters of an overlapping line. Plain PPU stores do not: waits time out after ~1 ms.
-extern std::atomic<u32> g_line_waiters;
-void guest_written_slow(u32 ea, u32 size);
-FORCE_INLINE void guest_written(u32 ea, u32 size) {
-    if (__builtin_expect(g_line_waiters.load(std::memory_order_acquire) != 0, 0)) {
-        std::atomic_thread_fence(std::memory_order_seq_cst);
-        guest_written_slow(ea, size);
-    }
-}
+// LineWait structures for blocking waits on guest memory (core.cpp). A waiting thread registers up to two 128-byte lines;
+// writers of guest memory wake the waiters of an overlapping line.
 struct LineWait {   // one per wait site; the slot it registers in belongs to the thread (one active wait per thread)
     u32 line0 = ~0u, line1 = ~0u;
     u32 seq = 0;

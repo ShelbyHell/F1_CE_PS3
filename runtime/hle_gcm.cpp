@@ -152,10 +152,7 @@ struct Rsx {
 } rsx_state;
 
 u32 label_ptr(u32 offset) { return g.label_addr + offset; }
-// the label a SEMAPHORE_ACQUIRE waits on (0: none). Plain PPU stores do not wake line waits, and the RSX's 1 ms timeout
-// sometimes took 10-30 ms on its pinned processor: the vblank handler's release of the flip label then came a vblank
-// late every 0.25-0.5 s (1% low ~16 fps at 30). So the interrupt thread wakes this line after each handler.
-std::atomic<u32> g_rsx_acquire_ea{0};
+// the label a SEMAPHORE_ACQUIRE waits on (0: none). Plain PPU stores to this line directly wake RSX via st32/st64.
 
 // the player's front wheel in the world, in a 3D scene: the swing of pace_ticks shows here, and only a stopped car has it. Frames of
 // two ticks hide the swing (the wheel reads the same each time), so once on, this holds until the car really moves or the scene ends.
@@ -416,7 +413,7 @@ void exec_method(u32 method, u32 arg) {
                     break;
                 }
                 if (old_spin) { std::this_thread::yield(); continue; }
-                if (now - start < 30) { for (int i = 0; i < 16; i++) _mm_pause(); continue; }
+                if (now - start < 80) { for (int i = 0; i < 16; i++) _mm_pause(); continue; }
                 rsx::zpass_service();   // (the PPU may be waiting for a report before it releases this)
                 if (!lw.armed) { line_wait_arm(lw, a, a); continue; }
                 (line_wait_block(lw, 1) ? woken : timeouts)++;

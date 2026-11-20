@@ -175,6 +175,7 @@ void futex_wake_all(std::atomic<u32>* a) {
 }
 }  // namespace
 std::atomic<u32> g_line_waiters{0};
+std::atomic<u32> g_rsx_acquire_ea{0};
 
 void guest_written_slow(u32 ea, u32 size) {
     const u32 first = ea & ~127u, last = (ea + std::max(size, 1u) - 1) & ~127u;
