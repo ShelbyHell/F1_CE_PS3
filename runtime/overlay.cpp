@@ -595,11 +595,11 @@ void draw_tyre_hud(ImDrawList* dl, float W, float H) {
     const float xs[4] = {fl_x, fr_x, fl_x, fr_x};
     const float ys[4] = {f_y, f_y, r_y, r_y};
     const char* wheel_names[4] = {"FL", "FR", "RL", "RR"};
-    const u32 slip = (ld32(car + 0x97c) >> 8) & 0xf;
+    const u32 slip = (ld32(car + slick::CarOffset::WheelSlip) >> 8) & 0xf;
     const bool is_stock_grooved = (compound == slick::Compound::baseline && slick::selected_preset() == slick::Preset::stock);
 
     for (int w = 0; w < 4; ++w) {
-        const float wear = std::bit_cast<float>(ld32(car + 0x8b0 + 4 * w));
+        const float wear = std::bit_cast<float>(ld32(car + slick::CarOffset::TyreWear + 4 * w));
         const float worn_pct = std::clamp(wear / 0.65f * 100.0f, 0.0f, 100.0f);
         const float life_pct = 100.0f - worn_pct;
         const bool slipping = ((slip >> w) & 1) != 0;

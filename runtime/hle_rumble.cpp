@@ -53,14 +53,25 @@ void slick_telemetry(u32 car, float speed, u64 now, bool driving) {
     static const u64 start = now;
     const int axis = (int)g_slick_pad.load(std::memory_order_relaxed) - 128;
     const float steer = axis / (axis < 0 ? 128.0f : 127.0f);
-    const u32 slip = (ld32(car + 0x97c) >> 8) & 0xf;
+    const u32 slip = (ld32(car + slick::CarOffset::WheelSlip) >> 8) & 0xf;
     const auto wake = slick::current_wake();
     std::fprintf(csv, "%.3f,%08x,%.3f,%.4f,%.4f,%d,%u,%u,%u,%u,%u,%.3f,%.3f,%.3f,%.3f,%.6f,%.6f,%.6f,%.6f,%08x,%u,%d,%d,%.2f,%.3f\n",
-                 (now - start) / 1e6, car, speed, steer, ldf(car + 0x950), (int)(s8)ld8(car + 0x9b8),
-                 ld32(car + 0x980) & 0xf, slip & 1, (slip >> 1) & 1, (slip >> 2) & 1, (slip >> 3) & 1,
-                 ldf(car + 0x530), ldf(car + 0x534), ldf(car + 0x538), ldf(car + 0x53c),
-                 ldf(car + 0x8b0), ldf(car + 0x8b4), ldf(car + 0x8b8), ldf(car + 0x8bc), ld32(car + 0x5f0),
-                 ld32(car + 0x964), (int)slick::physics_eligible(car), (int)driving,
+                 (now - start) / 1e6, car, speed, steer,
+                 ldf(car + slick::CarOffset::Throttle),
+                 (int)(s8)ld8(car + slick::CarOffset::Gear),
+                 ld32(car + slick::CarOffset::WheelContact) & 0xf,
+                 slip & 1, (slip >> 1) & 1, (slip >> 2) & 1, (slip >> 3) & 1,
+                 ldf(car + slick::CarOffset::WheelLoads),
+                 ldf(car + slick::CarOffset::WheelLoads + 4),
+                 ldf(car + slick::CarOffset::WheelLoads + 8),
+                 ldf(car + slick::CarOffset::WheelLoads + 12),
+                 ldf(car + slick::CarOffset::TyreWear),
+                 ldf(car + slick::CarOffset::TyreWear + 4),
+                 ldf(car + slick::CarOffset::TyreWear + 8),
+                 ldf(car + slick::CarOffset::TyreWear + 12),
+                 ld32(car + slick::CarOffset::TyreFlags),
+                 ld32(car + slick::CarOffset::WearMode),
+                 (int)slick::physics_eligible(car), (int)driving,
                  wake.dist_ahead < 900.0f ? wake.dist_ahead : 0.0f, wake.intensity);
     std::fflush(csv);
 }
@@ -186,7 +197,7 @@ bool controller_update_hook(PPUContext& c) {
         const u32 player = ld32(ctl + 0x160);
         const u32 car = player ? ld32(player + 0x24) : 0;
         if (car) slick::set_player_car(car);
-        const float speed = car ? ldf(car + 0x3c0) * 3.6f : -1.0f;
+        const float speed = car ? ldf(car + slick::CarOffset::Speed) * 3.6f : -1.0f;
         if (std::isfinite(speed) && speed >= 0.0f) {
             const u64 now = time_usec();
             if (driving && slick::handling_enabled()) {

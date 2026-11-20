@@ -8,6 +8,32 @@
 #include <string_view>
 
 namespace slick {
+
+// ============================================================================
+// Guest Vehicle Memory Layout Offsets
+// ============================================================================
+// Offsets within the guest PS3 vehicle simulation object (0x1390 bytes).
+namespace CarOffset {
+    constexpr unsigned FwdVector    = 0x0d0; // 3x float: body forward direction vector [X, Y, Z]
+    constexpr unsigned Position     = 0x0e0; // 3x float: body world position vector [X, Y, Z]
+    constexpr unsigned BodyPtr      = 0x140; // u32: pointer to vehicle rigid body
+    constexpr unsigned Speed        = 0x3c0; // float: vehicle speed in m/s (speed * 3.6f -> km/h)
+    constexpr unsigned TyreForces   = 0x4d0; // 4x float: tyre force outputs
+    constexpr unsigned WheelLoads   = 0x530; // 4x float: vertical loads per wheel [FL, FR, RL, RR]
+    constexpr unsigned GripLevel    = 0x554; // float: tyre grip ratio
+    constexpr unsigned TyreFlags    = 0x5f0; // u32: surface and tyre configuration flags
+    constexpr unsigned TyreWear     = 0x8b0; // 4x float: accumulated tyre wear [FL, FR, RL, RR]
+    constexpr unsigned EngineOmega  = 0x94c; // float: engine speed in rad/s
+    constexpr unsigned Throttle     = 0x950; // float: driver throttle demand (0.0 to 1.0)
+    constexpr unsigned WearMode     = 0x964; // u32: tyre wear simulation mode (1 = Career, 2 = Quick Race)
+    constexpr unsigned WheelSlip    = 0x97c; // u32: slip bitmask (bits 8..11 indicate slip on FL, FR, RL, RR)
+    constexpr unsigned WheelContact = 0x980; // u32: ground contact bitmask (bits 0..3: FL, FR, RL, RR)
+    constexpr unsigned Gear         = 0x9b8; // s8: engaged gear (-1 = Reverse, 0 = Neutral, 1..7 = Forward)
+}
+
+// ============================================================================
+// Physics Presets & Gamepad Steering Response
+// ============================================================================
 enum class Preset { stock, basic, modern, w11 };
 
 inline constexpr Preset parse_preset(std::string_view mode) {
@@ -25,20 +51,36 @@ inline Preset selected_preset() {
     return preset;
 }
 
-inline bool handling_enabled() { return selected_preset() == Preset::modern || selected_preset() == Preset::w11; }
+inline bool handling_enabled() {
+    return selected_preset() == Preset::modern || selected_preset() == Preset::w11;
+}
 
+inline float smoothstep(float value) {
+    const float t = std::clamp(value, 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
+// 2026 Modern Preset: progressive steering filter
 inline float pad_steer(float x, float kmh) {
     const float fast = std::clamp((kmh - 90.0f) / 150.0f, 0.0f, 1.0f);
     const float small = 0.82f - 0.12f * fast;
     return x * (small + (1.0f - small) * x * x) * (1.0f - 0.22f * fast);
 }
 
-struct AxleGrip { float front, rear; };
-
-inline float smoothstep(float value) {
-    const float t = std::clamp(value, 0.0f, 1.0f);
-    return t * t * (3.0f - 2.0f * t);
+// 2020 W11 Profile: high-downforce, razor-sharp steering curve
+inline float w11_pad_steer(float x, float kmh) {
+    const float high_speed = smoothstep((kmh - 120.0f) / 140.0f);
+    const float response = x * (0.90f + 0.10f * x * x);
+    return response * (1.0f - 0.18f * high_speed);
 }
+
+// ============================================================================
+// Axle Grip Curves & Drive Torque Boost
+// ============================================================================
+struct AxleGrip {
+    float front = 1.0f;
+    float rear  = 1.0f;
+};
 
 inline AxleGrip modern_grip(float kmh) {
     const float speed = std::clamp(kmh, 0.0f, 240.0f);
@@ -56,12 +98,6 @@ inline AxleGrip w11_grip(float kmh) {
     return {base * (1.0f + 0.012f * (1.0f - balance)), base * (1.0f + 0.020f * balance)};
 }
 
-inline float w11_pad_steer(float x, float kmh) {
-    const float high_speed = smoothstep((kmh - 120.0f) / 140.0f);
-    const float response = x * (0.90f + 0.10f * x * x);
-    return response * (1.0f - 0.18f * high_speed);
-}
-
 inline float drive_boost_ceiling(Preset preset, float speed_kmh, float throttle) {
     if (preset != Preset::modern && preset != Preset::w11) return 0.0f;
     const float low = preset == Preset::w11 ? 12.0f : 15.0f;
@@ -73,9 +109,9 @@ inline float drive_boost_ceiling(Preset preset, float speed_kmh, float throttle)
                       (preset == Preset::w11 ? 0.60f : 0.55f), 0.0f, 1.0f);
 }
 
+// Smooth rate limiter for torque augmentation
 // One update per stock physics substep (three per 60 Hz simulation tick).
-// Cut extra torque in ~45 ms, rebuild it in ~180 ms. Never retain boost above
-// the current throttle/speed ceiling, and immediately drop it when ineligible.
+// Cut extra torque in ~45 ms, rebuild it in ~180 ms.
 struct DriveResponse {
     float boost = 0.0f;
 
@@ -89,6 +125,9 @@ struct DriveResponse {
     }
 };
 
+// ============================================================================
+// Tyre Compounds & Degradation Model
+// ============================================================================
 enum class Compound { baseline, soft, hard };
 
 inline Compound selected_compound() {
@@ -113,12 +152,17 @@ inline float compound_grip(Compound compound, float wear) {
     return 1.0f;
 }
 
-// A negative value means the player controller is not currently updating.
-float player_speed_kmh();
-float player_pad_steer();
-bool telemetry_enabled();
-void telemetry_pad_axis(unsigned lx);
+inline bool dry_wear_state(unsigned tyre_flags, unsigned wear_mode) {
+    // Career uses wear mode 1; Quick Race uses 2. 0x3000 is a transient
+    // session/status field, while the low 5 bits identify the dry surface.
+    return (tyre_flags & 0x1fu) == 0x19u && (wear_mode == 1u || wear_mode == 2u);
+}
+
 bool physics_eligible(unsigned car);
+
+// ============================================================================
+// Braking Dynamics & Dynamic Trail-Braking
+// ============================================================================
 inline float selected_brake_bias() {
     static const float bias = [] {
         const char* val = std::getenv("F1CE_BRAKE_BIAS");
@@ -186,12 +230,9 @@ inline TrailBrakeEffect trail_brake_grip(float speed_kmh, float pad_steer,
     return res;
 }
 
-inline bool dry_wear_state(unsigned tyre_flags, unsigned wear_mode) {
-    // Career uses wear mode 1; Quick Race uses 2. 0x3000 is a transient
-    // session/status field, while the low 5 bits identify the dry surface.
-    return (tyre_flags & 0x1fu) == 0x19u && (wear_mode == 1u || wear_mode == 2u);
-}
-
+// ============================================================================
+// Aerodynamics: Dirty Air & Slipstream Model
+// ============================================================================
 struct Vec3 { float x = 0.0f, y = 0.0f, z = 0.0f; };
 
 struct WakeInfo {
@@ -282,6 +323,9 @@ inline WakeInfo current_wake() {
             s.in_slipstream.load(std::memory_order_relaxed)};
 }
 
+// ============================================================================
+// Runtime Telemetry & In-Game HUD State
+// ============================================================================
 inline std::atomic<unsigned>& player_car_ref() {
     static std::atomic<unsigned> car{0};
     return car;
@@ -290,6 +334,12 @@ inline std::atomic<unsigned>& player_car_ref() {
 inline void set_player_car(unsigned car) { player_car_ref().store(car, std::memory_order_relaxed); }
 inline unsigned player_car() { return player_car_ref().load(std::memory_order_relaxed); }
 
+// A negative value means the player controller is not currently updating.
+float player_speed_kmh();
+float player_pad_steer();
+bool telemetry_enabled();
+void telemetry_pad_axis(unsigned lx);
+
 inline bool tyre_hud_enabled() {
     static const bool enabled = [] {
         const char* val = std::getenv("F1CE_TYRE_HUD");
@@ -297,4 +347,5 @@ inline bool tyre_hud_enabled() {
     }();
     return enabled;
 }
-}
+
+} // namespace slick
