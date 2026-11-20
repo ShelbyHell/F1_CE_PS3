@@ -99,9 +99,10 @@ void update_pad(SDL_Gamepad* gp) {
         return inputcfg::shape(pad[pos] - pad[neg], g_in.deadzone, curve);
     };
     float lx = stick(LS_LEFT, LS_RIGHT, g_in.curve), ly = stick(LS_UP, LS_DOWN, 100);
-    if (gp && slick::handling_enabled() && lx != 0.0f) {
+        if (gp && slick::handling_enabled() && lx != 0.0f) {
         const float speed = slick::player_speed_kmh();
-        if (speed >= 0.0f) lx = slick::pad_steer(lx, speed);
+        if (speed >= 0.0f)
+            lx = slick::selected_preset() == slick::Preset::w11 ? slick::w11_pad_steer(lx, speed) : slick::pad_steer(lx, speed);
     }
     float rx = stick(RS_LEFT, RS_RIGHT, 100), ry = stick(RS_UP, RS_DOWN, 100);
     {   // keyboard steering: towards full lock in steer_ms, back to the centre in centre_ms

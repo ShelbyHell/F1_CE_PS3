@@ -182,7 +182,7 @@ Combo g_combos[] = {
     {L"Component failure", L"F1CE_QR_FAILURES", {{L"Game menu", nullptr}, {L"Off", L"0"}, {L"On", L"1"}}, 0, QR_RULES},
     {L"Penalties", L"F1CE_QR_PENALTIES", {{L"Game menu", nullptr}, {L"Off", L"0"}, {L"On", L"1"}}, 0, QR_RULES},
     {L"Slick physics", L"F1CE_SLICK_TEST",
-     {{L"Stock", nullptr}, {L"Basic slicks", L"1"}, {L"2026 (with handling)", L"2026"}}, 0, QR_RULES,
+     {{L"Stock", nullptr}, {L"Basic slicks", L"1"}, {L"2026 (with handling)", L"2026"}, {L"2020 W11", L"w11"}}, 0, QR_RULES,
      L"Experimental offline dry-tyre physics. Use Realistic tyre wear. Textures are a separate mod pack."},
     {L"Slick compound", L"F1CE_SLICK_COMPOUND", {{L"Baseline", nullptr}, {L"Soft", L"soft"}, {L"Hard", L"hard"}}, 0, QR_RULES},
     {L"Slick telemetry (CSV)", L"F1CE_SLICK_TELEMETRY", {{L"Off", nullptr}, {L"On", L"1"}}, 0, QR_RULES,

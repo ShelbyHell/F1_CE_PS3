@@ -6,9 +6,10 @@
 #include <string_view>
 
 namespace slick {
-enum class Preset { stock, basic, modern };
+enum class Preset { stock, basic, modern, w11 };
 
 inline constexpr Preset parse_preset(std::string_view mode) {
+    if (mode == "w11") return Preset::w11;
     if (mode == "2026" || mode == "handling") return Preset::modern;
     if (mode == "1") return Preset::basic;
     return Preset::stock;
@@ -22,7 +23,7 @@ inline Preset selected_preset() {
     return preset;
 }
 
-inline bool handling_enabled() { return selected_preset() == Preset::modern; }
+inline bool handling_enabled() { return selected_preset() == Preset::modern || selected_preset() == Preset::w11; }
 
 inline float pad_steer(float x, float kmh) {
     const float fast = std::clamp((kmh - 90.0f) / 150.0f, 0.0f, 1.0f);
@@ -32,13 +33,42 @@ inline float pad_steer(float x, float kmh) {
 
 struct AxleGrip { float front, rear; };
 
+inline float smoothstep(float value) {
+    const float t = std::clamp(value, 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+
 inline AxleGrip modern_grip(float kmh) {
     const float speed = std::clamp(kmh, 0.0f, 240.0f);
     const float aero = 0.06f * speed * speed / (240.0f * 240.0f);
-    const float blend = std::clamp((speed - 20.0f) / 180.0f, 0.0f, 1.0f);
-    const float balance = blend * blend * (3.0f - 2.0f * blend);
+    const float balance = smoothstep((speed - 20.0f) / 180.0f);
     const float base = 1.10f + aero;
     return {base * (1.0f + 0.015f * (1.0f - balance)), base * (1.0f + 0.015f * balance)};
+}
+
+inline AxleGrip w11_grip(float kmh) {
+    const float speed = std::clamp(kmh, 0.0f, 280.0f);
+    const float aero = 0.12f * speed * speed / (240.0f * 240.0f);
+    const float balance = smoothstep((speed - 65.0f) / 150.0f);
+    const float base = 1.07f + aero;
+    return {base * (1.0f + 0.012f * (1.0f - balance)), base * (1.0f + 0.020f * balance)};
+}
+
+inline float w11_pad_steer(float x, float kmh) {
+    const float high_speed = smoothstep((kmh - 120.0f) / 140.0f);
+    const float response = x * (0.90f + 0.10f * x * x);
+    return response * (1.0f - 0.18f * high_speed);
+}
+
+inline float drive_boost_ceiling(Preset preset, float speed_kmh, float throttle) {
+    if (preset != Preset::modern && preset != Preset::w11) return 0.0f;
+    const float low = preset == Preset::w11 ? 12.0f : 15.0f;
+    const float end = preset == Preset::w11 ? 320.0f : 280.0f;
+    const float ramp = std::min(std::clamp((speed_kmh - low) / 45.0f, 0.0f, 1.0f),
+                                std::clamp((end - speed_kmh) / (preset == Preset::w11 ? 120.0f : 100.0f), 0.0f, 1.0f));
+    return (preset == Preset::w11 ? 0.08f : 0.12f) * ramp *
+           std::clamp((throttle - (preset == Preset::w11 ? 0.40f : 0.45f)) /
+                      (preset == Preset::w11 ? 0.60f : 0.55f), 0.0f, 1.0f);
 }
 
 // One update per stock physics substep (three per 60 Hz simulation tick).

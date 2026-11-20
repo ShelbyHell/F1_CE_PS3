@@ -41,8 +41,8 @@ void slick_grip_probe(PPUContext& c) {
     const float speed = std::bit_cast<float>(ld32(car + 0x3c0));
     // This vector is computed afresh, then stored at car + 0x4d0.
     float front = 1.05f, rear = 1.05f;
-    if (preset == slick::Preset::modern && speed >= 0.0f) {
-        const auto balance = slick::modern_grip(speed * 3.6f);
+    if ((preset == slick::Preset::modern || preset == slick::Preset::w11) && speed >= 0.0f) {
+        const auto balance = preset == slick::Preset::w11 ? slick::w11_grip(speed * 3.6f) : slick::modern_grip(speed * 3.6f);
         front = balance.front;
         rear = balance.rear;
     }
@@ -55,12 +55,13 @@ void slick_grip_probe(PPUContext& c) {
     static std::atomic_flag logged{};
     if (!logged.test_and_set(std::memory_order_relaxed))
         LOG_I("slick test: dry grip base front x%.3f rear x%.3f (%s, compound %d)", front, rear,
-              preset == slick::Preset::modern ? "2026" : "basic", (int)compound);
+              preset == slick::Preset::w11 ? "W11" : preset == slick::Preset::modern ? "2026" : "basic", (int)compound);
 }
 
 void slick_drive_probe(PPUContext& c) {
     const u32 car = (u32)c.r[31];
-    if (slick_test_car(car) != slick::Preset::modern) return;
+    const auto preset = slick_test_car(car);
+    if (preset != slick::Preset::modern && preset != slick::Preset::w11) return;
     struct Slot { u32 car = 0; u64 seen = 0; slick::DriveResponse response; };
     static thread_local std::array<Slot, 32> cars{};
     auto it = std::find_if(cars.begin(), cars.end(), [car](const Slot& s) { return s.car == car; });
@@ -79,17 +80,15 @@ void slick_drive_probe(PPUContext& c) {
         it->response = {};
         return;
     }
-    // Increase only positive engine output, before the stock clutch/gear and
-    // tyre solver. Fade in after launch, and taper to zero near top speed.
-    const float ramp = std::min(std::clamp((speed - 15.0f) / 45.0f, 0.0f, 1.0f),
-                                std::clamp((280.0f - speed) / 100.0f, 0.0f, 1.0f));
-    const float ceiling = 0.12f * ramp * std::clamp((throttle - 0.45f) / 0.55f, 0.0f, 1.0f);
+    // Increase only positive engine output, before the stock clutch/gear and tyre solver.
+    const float ceiling = slick::drive_boost_ceiling(preset, speed, throttle);
     const float boost = it->response.step(ceiling, (ld32(car + 0x97c) & 0xc00) != 0);
     if (!(boost > 0.0f)) return;
     c.f[7].d = (float)c.f[7].d * (1.0f + boost);
     static std::atomic_flag logged{};
     if (boost >= 0.001f && !logged.test_and_set(std::memory_order_relaxed))
-        LOG_I("slick test: progressive drive active, +%.1f%% at %.0f km/h", boost * 100.0f, speed);
+        LOG_I("slick test: %s drive active, +%.1f%% at %.0f km/h", preset == slick::Preset::w11 ? "W11" : "2026",
+              boost * 100.0f, speed);
 }
 
 // Debug: F1CE_PHYS_SNAP=<s>,<car hex>: <s> seconds into the first 3D scene, that car object (0x1390 bytes) and its body

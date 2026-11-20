@@ -31,9 +31,14 @@ In either launcher, use **Quick Race → Slick physics**, **Slick compound**, an
 | `Start-Slick-Test.cmd` | Grip multiplier ×1.05 and wear accumulation ×1.25. |
 | `Start-2026-Test.cmd` | Combined **2026 (with handling)** preset, with stock textures. |
 | `Start-2026-With-Textures.cmd` | The same combined preset with smooth dry tread textures. |
+| `Start-W11-With-Textures.cmd` | 2020 W11-style profile: lower low-speed mechanical grip, stronger high-speed aero-like grip, more direct gamepad steering, and smoother but smaller traction help. |
 | `Start-Handling-Test.cmd` | Compatibility shortcut for `Start-2026-With-Textures.cmd`. |
 
 The combined preset models a modest rise in effective grip with speed (+10–17.5% across the tested range), smoothly shifting a little grip balance from front at low speed toward rear at high speed. Gamepad steering keeps full lock up to 90 km/h and tapers to at most 78% stick output from 240 km/h. Wheel, keyboard and menu input curves are unchanged. Positive drive torque can increase by up to 12%, fading to zero by 280 km/h. Rear wheelspin tapers the boost over about 45 ms; traction recovery brings it back over about 180 ms. This is an experimental handling approximation, not a simulation of the 2026 F1 power unit. Both `F1CE_SLICK_TEST=2026` and the old `handling` value select the same preset.
+
+### 2020 W11 profile
+
+Select **2020 W11** in the launcher or set `F1CE_SLICK_TEST=w11`. The prototype applies about +8% axle grip around walking speed, increasing smoothly to +21% at 240 km/h; it shifts a little balance rearward as speed rises. Gamepad steering keeps full lock at low speed and retains 82% of full input at high speed. Traction assistance is limited to 8%, with the stock rear-wheelspin gate, so throttle control still matters. These are tuning values for this mod, not measurements or a reconstruction of Mercedes telemetry.
 
 ### Dry compounds
 

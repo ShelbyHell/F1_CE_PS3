@@ -265,7 +265,7 @@ std::vector<Option> make_options() {
                        0, qr));
     v.push_back(header(QUICK_RACE, "Experimental slick tyres"));
     v.push_back(choice(QUICK_RACE, "Slick physics", "F1CE_SLICK_TEST",
-                       {{"Stock", nullptr}, {"Basic slicks", "1"}, {"2026 (with handling)", "2026"}},
+                       {{"Stock", nullptr}, {"Basic slicks", "1"}, {"2026 (with handling)", "2026"}, {"2020 W11", "w11"}},
                        0, "Experimental offline physics for dry tyres. Use Realistic tyre wear. Textures are a separate mod pack."));
     v.push_back(greyed(choice(QUICK_RACE, "Slick compound", "F1CE_SLICK_COMPOUND",
                        {{"Baseline", nullptr}, {"Soft", "soft"}, {"Hard", "hard"}}, 0,

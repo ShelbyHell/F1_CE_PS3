@@ -4,6 +4,7 @@ cd /d "%~dp0" || exit /b 1
 if exist "%~dp0local.cmd" call "%~dp0local.cmd"
 set "TEST_EXE=f1ce-slick.exe"
 if /i "%~1"=="2026" set "TEST_EXE=f1ce-slick-handling.exe"
+if /i "%~1"=="w11" set "TEST_EXE=f1ce-slick-handling.exe"
 if /i "%~1"=="handling" set "TEST_EXE=f1ce-slick-handling.exe"
 if exist "..\build-win\f1ce.exe" set "TEST_EXE=..\build-win\f1ce.exe"
 if not exist "%TEST_EXE%" (
@@ -20,6 +21,7 @@ if not exist "%DISC%\USRDIR\EBOOT.BIN" (
 set "F1CE_SLICK_TEST=1"
 if /i "%~1"=="stock" set "F1CE_SLICK_TEST=0"
 if /i "%~1"=="2026" set "F1CE_SLICK_TEST=2026"
+if /i "%~1"=="w11" set "F1CE_SLICK_TEST=w11"
 if /i "%~1"=="handling" set "F1CE_SLICK_TEST=2026"
 if /i "%TEST_EXE%"=="f1ce-slick-handling.exe" set "F1CE_SLICK_TEST=handling"
 set "F1CE_MOD_PACK="
