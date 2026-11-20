@@ -51,4 +51,32 @@ int main() {
     assert(slick::compound_grip(Compound::soft, 0.0f) > slick::compound_grip(Compound::hard, 0.0f));
     assert(slick::compound_grip(Compound::soft, 0.65f) < slick::compound_grip(Compound::hard, 0.65f));
     assert(close(slick::compound_grip(Compound::soft, 1.0f), slick::compound_grip(Compound::soft, 0.65f)));
+
+    // Wake / Dirty Air / Slipstream checks
+    const slick::Vec3 p_pos{0.0f, 0.0f, 0.0f};
+    const slick::Vec3 p_fwd{0.0f, 0.0f, 1.0f};
+    const slick::Vec3 rivals[3] = {
+        {0.0f, 0.0f, 15.0f},   // 15m ahead, directly in line
+        {10.0f, 0.0f, 20.0f},  // 20m ahead, far to right (outside cone)
+        {0.0f, 0.0f, -10.0f}   // 10m behind
+    };
+    const auto wake_close = slick::evaluate_wake(p_pos, p_fwd, rivals, 3, 220.0f, 0.05f);
+    assert(wake_close.dist_ahead > 14.9f && wake_close.dist_ahead < 15.1f);
+    assert(wake_close.intensity > 0.6f);
+    assert(wake_close.in_slipstream);
+
+    const auto aero_penalty = slick::dirty_air_penalty(wake_close, 220.0f);
+    assert(aero_penalty.front > aero_penalty.rear);
+    assert(aero_penalty.front > 0.03f);
+
+    const auto draft = slick::slipstream_boost(wake_close, 240.0f, 1.0f);
+    assert(draft > 0.03f && draft <= 0.06f);
+
+    // Clean air check
+    const slick::Vec3 no_rivals[1] = {{0.0f, 0.0f, -30.0f}};
+    const auto clean = slick::evaluate_wake(p_pos, p_fwd, no_rivals, 1, 240.0f, 0.0f);
+    assert(clean.intensity == 0.0f);
+    assert(!clean.in_slipstream);
+    assert(slick::dirty_air_penalty(clean, 240.0f).front == 0.0f);
+    assert(slick::slipstream_boost(clean, 240.0f, 1.0f) == 0.0f);
 }

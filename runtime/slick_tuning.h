@@ -1,6 +1,8 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <string_view>
@@ -121,4 +123,102 @@ inline bool dry_wear_state(unsigned tyre_flags, unsigned wear_mode) {
     // session/status field, while the low 5 bits identify the dry surface.
     return (tyre_flags & 0x1fu) == 0x19u && (wear_mode == 1u || wear_mode == 2u);
 }
+
+struct Vec3 { float x = 0.0f, y = 0.0f, z = 0.0f; };
+
+struct WakeInfo {
+    float dist_ahead = 999.0f;
+    float lateral_offset = 0.0f;
+    float intensity = 0.0f;
+    bool in_slipstream = false;
+};
+
+inline WakeInfo evaluate_wake(Vec3 pos, Vec3 fwd, const Vec3* others, size_t count, float speed_kmh, float steer_abs) {
+    WakeInfo best;
+    const float fwd_len = std::sqrt(fwd.x * fwd.x + fwd.y * fwd.y + fwd.z * fwd.z);
+    if (fwd_len < 1e-4f) return best;
+    fwd.x /= fwd_len; fwd.y /= fwd_len; fwd.z /= fwd_len;
+
+    for (size_t i = 0; i < count; ++i) {
+        const Vec3 d{others[i].x - pos.x, others[i].y - pos.y, others[i].z - pos.z};
+        const float dist_fwd = d.x * fwd.x + d.y * fwd.y + d.z * fwd.z;
+        if (dist_fwd < 2.5f || dist_fwd > 65.0f) continue;
+
+        const Vec3 perp{d.x - dist_fwd * fwd.x, d.y - dist_fwd * fwd.y, d.z - dist_fwd * fwd.z};
+        const float lat_dist = std::sqrt(perp.x * perp.x + perp.y * perp.y + perp.z * perp.z);
+        const float cone_radius = 2.2f + 0.08f * dist_fwd;
+        if (lat_dist > cone_radius) continue;
+
+        const float long_fade = (65.0f - dist_fwd) / 62.5f;
+        const float lat_fade = (cone_radius - lat_dist) / cone_radius;
+        const float intensity = std::clamp(long_fade * lat_fade, 0.0f, 1.0f);
+        if (intensity > best.intensity) {
+            best.dist_ahead = dist_fwd;
+            best.lateral_offset = lat_dist;
+            best.intensity = intensity;
+        }
+    }
+
+    if (best.intensity > 0.15f && speed_kmh > 160.0f && steer_abs < 0.20f) {
+        best.in_slipstream = true;
+    }
+    return best;
+}
+
+inline AxleGrip dirty_air_penalty(WakeInfo wake, float speed_kmh) {
+    if (wake.intensity <= 0.0f) return {0.0f, 0.0f};
+    const float aero = std::clamp((speed_kmh - 80.0f) / 130.0f, 0.0f, 1.0f);
+    // Front wing wash-out creates understeer in high-speed bends; rear loses less
+    return {0.065f * wake.intensity * aero, 0.025f * wake.intensity * aero};
+}
+
+inline float slipstream_boost(WakeInfo wake, float speed_kmh, float throttle) {
+    if (!wake.in_slipstream || throttle < 0.85f) return 0.0f;
+    const float speed_factor = std::clamp((speed_kmh - 160.0f) / 80.0f, 0.0f, 1.0f);
+    return 0.06f * wake.intensity * speed_factor;
+}
+
+inline bool dirty_air_enabled() {
+    static const bool enabled = [] {
+        const char* val = std::getenv("F1CE_DIRTY_AIR");
+        return !val || std::strcmp(val, "0") != 0;
+    }();
+    return enabled && handling_enabled();
+}
+
+struct WakeState {
+    std::atomic<float> dist_ahead{999.0f};
+    std::atomic<float> lateral_offset{0.0f};
+    std::atomic<float> intensity{0.0f};
+    std::atomic<bool> in_slipstream{false};
+};
+
+inline WakeState& wake_state() {
+    static WakeState state;
+    return state;
+}
+
+inline void update_wake(const WakeInfo& w) {
+    auto& s = wake_state();
+    s.dist_ahead.store(w.dist_ahead, std::memory_order_relaxed);
+    s.lateral_offset.store(w.lateral_offset, std::memory_order_relaxed);
+    s.intensity.store(w.intensity, std::memory_order_relaxed);
+    s.in_slipstream.store(w.in_slipstream, std::memory_order_relaxed);
+}
+
+inline WakeInfo current_wake() {
+    auto& s = wake_state();
+    return {s.dist_ahead.load(std::memory_order_relaxed),
+            s.lateral_offset.load(std::memory_order_relaxed),
+            s.intensity.load(std::memory_order_relaxed),
+            s.in_slipstream.load(std::memory_order_relaxed)};
+}
+
+inline std::atomic<unsigned>& player_car_ref() {
+    static std::atomic<unsigned> car{0};
+    return car;
+}
+
+inline void set_player_car(unsigned car) { player_car_ref().store(car, std::memory_order_relaxed); }
+inline unsigned player_car() { return player_car_ref().load(std::memory_order_relaxed); }
 }

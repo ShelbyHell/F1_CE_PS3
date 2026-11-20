@@ -271,6 +271,10 @@ std::vector<Option> make_options() {
                        {{"Baseline", nullptr}, {"Soft", "soft"}, {"Hard", "hard"}}, 0,
                        "Soft has more fresh grip and wears faster. Hard has less fresh grip and lasts longer."),
                        "F1CE_SLICK_TEST", nullptr));
+    v.push_back(greyed(choice(QUICK_RACE, "Dirty air & slipstream", "F1CE_DIRTY_AIR",
+                              {{"On", nullptr}, {"Off", "0"}}, 0,
+                              "Simulates front downforce loss when following closely in corners, and slipstream boost on straights."),
+                       "F1CE_SLICK_TEST", nullptr));
     v.push_back(toggle(QUICK_RACE, "Slick telemetry (CSV)", "F1CE_SLICK_TELEMETRY",
                        "Records player inputs, speed, wheelspin and wear at 10 Hz in slick_telemetry.csv. Works in Stock too."));
 

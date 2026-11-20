@@ -46,7 +46,7 @@ void slick_telemetry(u32 car, float speed, u64 now, bool driving) {
     static FILE* csv = [] {
         FILE* out = std::fopen("slick_telemetry.csv", "w");
         if (!out) { LOG_W("slick telemetry: could not open slick_telemetry.csv"); return out; }
-        std::fputs("elapsed_s,car,speed_kmh,pad_steer,throttle,gear,contact_mask,slip_0,slip_1,slip_2,slip_3,load_0,load_1,load_2,load_3,wear_0,wear_1,wear_2,wear_3,tyre_flags,wear_mode,slick_eligible,player_driving\n", out);
+        std::fputs("elapsed_s,car,speed_kmh,pad_steer,throttle,gear,contact_mask,slip_0,slip_1,slip_2,slip_3,load_0,load_1,load_2,load_3,wear_0,wear_1,wear_2,wear_3,tyre_flags,wear_mode,slick_eligible,player_driving,wake_dist,wake_intensity\n", out);
         return out;
     }();
     if (!csv) return;
@@ -54,12 +54,14 @@ void slick_telemetry(u32 car, float speed, u64 now, bool driving) {
     const int axis = (int)g_slick_pad.load(std::memory_order_relaxed) - 128;
     const float steer = axis / (axis < 0 ? 128.0f : 127.0f);
     const u32 slip = (ld32(car + 0x97c) >> 8) & 0xf;
-    std::fprintf(csv, "%.3f,%08x,%.3f,%.4f,%.4f,%d,%u,%u,%u,%u,%u,%.3f,%.3f,%.3f,%.3f,%.6f,%.6f,%.6f,%.6f,%08x,%u,%d,%d\n",
+    const auto wake = slick::current_wake();
+    std::fprintf(csv, "%.3f,%08x,%.3f,%.4f,%.4f,%d,%u,%u,%u,%u,%u,%.3f,%.3f,%.3f,%.3f,%.6f,%.6f,%.6f,%.6f,%08x,%u,%d,%d,%.2f,%.3f\n",
                  (now - start) / 1e6, car, speed, steer, ldf(car + 0x950), (int)(s8)ld8(car + 0x9b8),
                  ld32(car + 0x980) & 0xf, slip & 1, (slip >> 1) & 1, (slip >> 2) & 1, (slip >> 3) & 1,
                  ldf(car + 0x530), ldf(car + 0x534), ldf(car + 0x538), ldf(car + 0x53c),
                  ldf(car + 0x8b0), ldf(car + 0x8b4), ldf(car + 0x8b8), ldf(car + 0x8bc), ld32(car + 0x5f0),
-                 ld32(car + 0x964), (int)slick::physics_eligible(car), (int)driving);
+                 ld32(car + 0x964), (int)slick::physics_eligible(car), (int)driving,
+                 wake.dist_ahead < 900.0f ? wake.dist_ahead : 0.0f, wake.intensity);
     std::fflush(csv);
 }
 
@@ -178,6 +180,7 @@ bool controller_update_hook(PPUContext& c) {
     if (runs && ((driving && slick::handling_enabled()) || slick::telemetry_enabled())) {
         const u32 player = ld32(ctl + 0x160);
         const u32 car = player ? ld32(player + 0x24) : 0;
+        if (car) slick::set_player_car(car);
         const float speed = car ? ldf(car + 0x3c0) * 3.6f : -1.0f;
         if (std::isfinite(speed) && speed >= 0.0f) {
             const u64 now = time_usec();

@@ -40,6 +40,13 @@ The combined preset models a modest rise in effective grip with speed (+10–17.
 
 Select **2020 W11** in the launcher or set `F1CE_SLICK_TEST=w11`. The prototype applies about +8% axle grip around walking speed, increasing smoothly to +21% at 240 km/h; it shifts a little balance rearward as speed rises. Gamepad steering keeps full lock at low speed and retains 82% of full input at high speed. Traction assistance is limited to 8%, with the stock rear-wheelspin gate, so throttle control still matters. These are tuning values for this mod, not measurements or a reconstruction of Mercedes telemetry.
 
+### Aerodynamics: Dirty Air & Slipstream
+
+When running modern or W11 handling presets, aerodynamic interaction between cars is actively modeled (can be disabled via launcher or `F1CE_DIRTY_AIR=0`):
+- **Dirty Air (Turbulent Wake):** When trailing another car closely (within ~65 m) in medium/high-speed corners (>80 km/h), the front wing washes out, losing up to 6.5% front grip and 2.5% rear grip, reproducing authentic understeer in traffic.
+- **Slipstream (Drafting Tow):** When running behind a car on high-speed straights (>160 km/h, straight steering, full throttle), aerodynamic drag reduction grants up to +6% extra drive assist to help pull off overtakes into braking zones.
+- The telemetry CSV records `wake_dist` and `wake_intensity` (0.000 to 1.000) for analysis.
+
 ### Dry compounds
 
 Set `F1CE_SLICK_COMPOUND=soft` or `hard` before launch (or in `local.cmd`). Leave it unset for the baseline. This is a session-wide preset for eligible dry tyres, not an extra compound choice in the game's pit menu. It has no effect with stock physics.
