@@ -56,7 +56,7 @@ The grip curve uses each wheel's own wear value and saturates at `0.65` internal
 
 Enable **Slick telemetry (CSV)** or set `F1CE_SLICK_TELEMETRY=1` before launching a script. The game writes `slick_telemetry.csv` in its working directory (`Slick-Test` for the scripts) at approximately 10 Hz while the player drives. Stock physics can log too. Each run with driving samples overwrites the previous CSV; rename it before comparing runs.
 
-The CSV includes speed in km/h, pad steering command (not road-wheel angle), throttle, gear, contact and wheel slip, wheel load, internal wear, raw tyre flags, the current wear mode, physics eligibility, and whether the player is driving. It also samples the player car during hand-offs, such as pit-lane control; `player_driving` distinguishes those rows. Wheel indices 0–1 are front; 2–3 are rear.
+The CSV includes speed in km/h, pad steering command (not road-wheel angle), throttle, gear, contact and wheel slip, wheel load, internal wear, raw tyre flags, the current wear mode, physics eligibility, and whether the player is driving. Career dry sessions use base tyre flags `0x19` and wear mode `1`; Quick Race uses wear mode `2`. The transient `0x3000` status bits are ignored. It also samples the player car during hand-offs, such as pit-lane control; `player_driving` distinguishes those rows. Wheel indices 0–1 are front; 2–3 are rear.
 
 To compare Stock and 2026, keep the car, track, assists, fuel load and weather the same. Mark the same corner and start/finish line crossings on each CSV's elapsed-time scale. For example, from the repository root:
 
@@ -69,5 +69,7 @@ Repeat the lap options for a series of complete laps. The tool reports end-of-co
 ## Verification
 
 Dry Silverstone runs confirmed activation of the grip, wear, and drive changes in `f1ce_recomp.log` (look for `slick test:`). The texture run confirmed all three replacements in `offline.wad`, and the smooth tread was visible on track. Lap times, acceleration times, tyre life, and hands-on gamepad feel have not been measured.
+
+A dry Silverstone Quick Race after the career eligibility fix confirmed W11 grip, wear ×1.25, and progressive drive assistance. Telemetry marked the dry career mode (`0x3019`, wear mode 1) eligible, while mode 3 remained ineligible. Intermediate/wet sets have not yet been manually verified.
 
 `tools/check_tuning.cpp` is a standalone C++20 check of the steering curve, boost ramp, and compound curves. Compile it without `NDEBUG` and run it to check the tuning math without starting the game.

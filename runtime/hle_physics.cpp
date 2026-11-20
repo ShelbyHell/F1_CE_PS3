@@ -17,7 +17,7 @@
 // Experimental single-player slick preset. Only the tyre state and realistic
 // wear mode observed in the stock dry Quick Race are eligible.
 bool slick::physics_eligible(unsigned car) {
-    return ((ld32(car + 0x5f0) >> 12) & 3) == 0 && ld32(car + 0x964) == 2;
+    return slick::dry_wear_state(ld32(car + 0x5f0), ld32(car + 0x964));
 }
 
 static slick::Preset slick_test_car(u32 car) {

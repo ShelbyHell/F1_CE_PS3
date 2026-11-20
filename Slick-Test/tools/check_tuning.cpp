@@ -10,6 +10,12 @@ int main() {
     static_assert(slick::parse_preset("handling") == slick::parse_preset("2026"));
     static_assert(slick::parse_preset("1") == slick::Preset::basic);
     static_assert(slick::parse_preset("0") == slick::Preset::stock);
+    assert(slick::dry_wear_state(0x19, 1));
+    assert(slick::dry_wear_state(0x3019, 1));
+    assert(slick::dry_wear_state(0x19, 2));
+    assert(!slick::dry_wear_state(0x19, 3));
+    assert(!slick::dry_wear_state(0x18, 1));
+    assert(!slick::dry_wear_state(0x1a, 1));
     const auto close = [](float a, float b) { return std::fabs(a - b) < 0.0001f; };
     assert(close(slick::pad_steer(1.0f, 90.0f), 1.0f));
     assert(close(slick::pad_steer(-1.0f, 240.0f), -0.78f));
