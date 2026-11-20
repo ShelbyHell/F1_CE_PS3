@@ -147,6 +147,11 @@ bool slick::telemetry_enabled() {
 
 void slick::telemetry_pad_axis(unsigned lx) { g_slick_pad.store(lx, std::memory_order_relaxed); }
 
+float slick::player_pad_steer() {
+    const int axis = (int)g_slick_pad.load(std::memory_order_relaxed) - 128;
+    return axis / (axis < 0 ? 128.0f : 127.0f);
+}
+
 void sub_003574C0(PPUContext& __restrict c);
 void ai_drive_update(PPUContext& c, u32 ctl, bool driving);   // hle_aidrive.cpp
 

@@ -187,6 +187,9 @@ Combo g_combos[] = {
     {L"Slick compound", L"F1CE_SLICK_COMPOUND", {{L"Baseline", nullptr}, {L"Soft", L"soft"}, {L"Hard", L"hard"}}, 0, QR_RULES},
     {L"Dirty air & slipstream", L"F1CE_DIRTY_AIR", {{L"On", nullptr}, {L"Off", L"0"}}, 0, QR_RULES,
      L"Simulates front downforce loss when following closely in corners, and slipstream boost on straights."},
+    {L"Brake bias", L"F1CE_BRAKE_BIAS",
+     {{L"56% (Balanced)", nullptr}, {L"58% (Front / Stable)", L"58"}, {L"54% (Rear / Agile)", L"54"}}, 0, QR_RULES,
+     L"Brake balance between front and rear axles for trail braking."},
     {L"Slick telemetry (CSV)", L"F1CE_SLICK_TELEMETRY", {{L"Off", nullptr}, {L"On", L"1"}}, 0, QR_RULES,
      L"Write player inputs, speed, wheelspin and tyre wear to slick_telemetry.csv at 10 Hz, including in Stock."},
     // Developer Tools

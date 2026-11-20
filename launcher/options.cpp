@@ -275,6 +275,10 @@ std::vector<Option> make_options() {
                               {{"On", nullptr}, {"Off", "0"}}, 0,
                               "Simulates front downforce loss when following closely in corners, and slipstream boost on straights."),
                        "F1CE_SLICK_TEST", nullptr));
+    v.push_back(greyed(choice(QUICK_RACE, "Brake bias", "F1CE_BRAKE_BIAS",
+                              {{"56% (Balanced)", nullptr}, {"58% (Front / Stable)", "58"}, {"54% (Rear / Agile)", "54"}}, 0,
+                              "Brake balance between front and rear axles. Affects trail braking rotation into corners."),
+                       "F1CE_SLICK_TEST", nullptr));
     v.push_back(toggle(QUICK_RACE, "Slick telemetry (CSV)", "F1CE_SLICK_TELEMETRY",
                        "Records player inputs, speed, wheelspin and wear at 10 Hz in slick_telemetry.csv. Works in Stock too."));
 

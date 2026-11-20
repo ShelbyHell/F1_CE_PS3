@@ -115,9 +115,77 @@ inline float compound_grip(Compound compound, float wear) {
 
 // A negative value means the player controller is not currently updating.
 float player_speed_kmh();
+float player_pad_steer();
 bool telemetry_enabled();
 void telemetry_pad_axis(unsigned lx);
 bool physics_eligible(unsigned car);
+inline float selected_brake_bias() {
+    static const float bias = [] {
+        const char* val = std::getenv("F1CE_BRAKE_BIAS");
+        if (val) {
+            float b = (float)std::atof(val);
+            if (b >= 50.0f && b <= 65.0f) return b * 0.01f;
+        }
+        return 0.56f;
+    }();
+    return bias;
+}
+
+struct TrailBrakeEffect {
+    float fl_mult = 1.0f;
+    float fr_mult = 1.0f;
+    float rl_mult = 1.0f;
+    float rr_mult = 1.0f;
+};
+
+inline TrailBrakeEffect trail_brake_grip(float speed_kmh, float pad_steer,
+                                         float load_0, float load_1, float load_2, float load_3,
+                                         float brake_bias = 0.56f) {
+    TrailBrakeEffect res;
+    if (speed_kmh < 30.0f) return res;
+
+    const float front_load = load_0 + load_1;
+    const float rear_load = load_2 + load_3;
+    const float total_load = front_load + rear_load;
+    if (total_load < 500.0f) return res;
+
+    const float front_ratio = front_load / total_load;
+    if (front_ratio < 0.52f) return res;
+
+    const float steer_mag = std::fabs(pad_steer);
+    if (steer_mag < 0.08f) return res;
+
+    const float brake_intensity = std::clamp((front_ratio - 0.52f) / 0.16f, 0.0f, 1.0f);
+    const float trail_blend = brake_intensity * std::clamp(steer_mag / 0.60f, 0.0f, 1.0f);
+
+    const bool turning_left = pad_steer < 0.0f;
+    const float load_inside = turning_left ? load_0 : load_1;
+    const float inside_ratio = front_load > 100.0f ? (load_inside / front_load) : 0.5f;
+
+    const float bias_factor = (brake_bias - 0.56f) * 2.5f;
+
+    float inside_scrub = 0.0f;
+    if (inside_ratio < 0.35f) {
+        inside_scrub = trail_blend * (0.35f - inside_ratio) * 0.35f * (1.0f + bias_factor);
+    }
+
+    const float outside_bite = trail_blend * 0.025f * std::max(1.0f - inside_scrub * 2.0f, 0.0f);
+    const float rear_rotation = trail_blend * std::max(0.018f - bias_factor * 0.02f, 0.005f);
+
+    if (turning_left) {
+        res.fl_mult -= inside_scrub;
+        res.fr_mult += outside_bite;
+        res.rl_mult -= rear_rotation;
+        res.rr_mult -= rear_rotation * 0.5f;
+    } else {
+        res.fr_mult -= inside_scrub;
+        res.fl_mult += outside_bite;
+        res.rr_mult -= rear_rotation;
+        res.rl_mult -= rear_rotation * 0.5f;
+    }
+    return res;
+}
+
 inline bool dry_wear_state(unsigned tyre_flags, unsigned wear_mode) {
     // Career uses wear mode 1; Quick Race uses 2. 0x3000 is a transient
     // session/status field, while the low 5 bits identify the dry surface.

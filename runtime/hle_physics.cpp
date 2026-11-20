@@ -87,11 +87,20 @@ void slick_grip_probe(PPUContext& c) {
             rear = std::max(rear - penalty.rear, 0.85f);
         }
     }
+    slick::TrailBrakeEffect trail{};
+    if (car == slick::player_car() && (preset == slick::Preset::modern || preset == slick::Preset::w11)) {
+        const float l0 = std::bit_cast<float>(ld32(car + 0x530));
+        const float l1 = std::bit_cast<float>(ld32(car + 0x534));
+        const float l2 = std::bit_cast<float>(ld32(car + 0x538));
+        const float l3 = std::bit_cast<float>(ld32(car + 0x53c));
+        trail = slick::trail_brake_grip(speed * 3.6f, slick::player_pad_steer(), l0, l1, l2, l3, slick::selected_brake_bias());
+    }
     const auto compound = slick::selected_compound();
+    const float trail_mults[4] = {trail.fl_mult, trail.fr_mult, trail.rl_mult, trail.rr_mult};
     // Guest lanes 0/1 are the front axle; VMX stores lane 0 at f[3].
     for (int wheel = 0; wheel < 4; ++wheel) {
         const float wear = compound == slick::Compound::baseline ? 0.0f : std::bit_cast<float>(ld32(car + 0x8b0 + 4 * wheel));
-        c.v[0].f[3 - wheel] *= (wheel < 2 ? front : rear) * slick::compound_grip(compound, wear);
+        c.v[0].f[3 - wheel] *= (wheel < 2 ? front : rear) * slick::compound_grip(compound, wear) * trail_mults[wheel];
     }
     static std::atomic_flag logged{};
     if (!logged.test_and_set(std::memory_order_relaxed))

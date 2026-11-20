@@ -79,4 +79,20 @@ int main() {
     assert(!clean.in_slipstream);
     assert(slick::dirty_air_penalty(clean, 240.0f).front == 0.0f);
     assert(slick::slipstream_boost(clean, 240.0f, 1.0f) == 0.0f);
+
+    // Trail braking checks
+    // Straight braking: high front load, 0 steer -> no asymmetry
+    const auto straight_brake = slick::trail_brake_grip(180.0f, 0.0f, 4000.0f, 4000.0f, 1500.0f, 1500.0f, 0.56f);
+    assert(straight_brake.fl_mult == 1.0f && straight_brake.fr_mult == 1.0f);
+    assert(straight_brake.rl_mult == 1.0f && straight_brake.rr_mult == 1.0f);
+
+    // Trail braking into left turn (steer < 0): inside is FL (load_0), outside is FR (load_1)
+    // Moderate trail: loaded outside gets bite (+), rear rotates (-)
+    const auto trail_left = slick::trail_brake_grip(120.0f, -0.30f, 2000.0f, 5000.0f, 1200.0f, 1800.0f, 0.56f);
+    assert(trail_left.fr_mult > 1.0f); // outside front bite
+    assert(trail_left.rl_mult < 1.0f); // inside rear rotation
+
+    // Over-braking into left turn with heavily unloaded inside FL (< 20% of front axle load):
+    const auto hard_scrub_left = slick::trail_brake_grip(100.0f, -0.60f, 600.0f, 6000.0f, 800.0f, 1800.0f, 0.58f);
+    assert(hard_scrub_left.fl_mult < 1.0f); // inside front scrubs
 }

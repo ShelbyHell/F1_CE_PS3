@@ -47,6 +47,13 @@ When running modern or W11 handling presets, aerodynamic interaction between car
 - **Slipstream (Drafting Tow):** When running behind a car on high-speed straights (>160 km/h, straight steering, full throttle), aerodynamic drag reduction grants up to +6% extra drive assist to help pull off overtakes into braking zones.
 - The telemetry CSV records `wake_dist` and `wake_intensity` (0.000 to 1.000) for analysis.
 
+### Braking & Trail Braking
+
+Corner entry under braking dynamically evaluates load transfer across axles:
+- **Trail Braking:** Easing off the brakes while turning loads the outside front tyre (+2.5% grip reward) while allowing the rear axle to rotate smoothly toward the apex.
+- **Inside Wheel Lockup / Scrub:** Over-braking into a turn with an unloaded inside front tyre causes progressive grip scrub and understeer.
+- **Brake Bias:** Configurable via launcher or `F1CE_BRAKE_BIAS` (default `56` for 56% front; `58` for high-speed stability; `54` for agile low-speed rotation).
+
 ### Dry compounds
 
 Set `F1CE_SLICK_COMPOUND=soft` or `hard` before launch (or in `local.cmd`). Leave it unset for the baseline. This is a session-wide preset for eligible dry tyres, not an extra compound choice in the game's pit menu. It has no effect with stock physics.
