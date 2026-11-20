@@ -121,10 +121,13 @@ PackIndex build_index() {
         const char* dir = getenv("F1CE_MODS_DIR");
         const auto mods_dir = stdfs::u8path(dir && *dir ? dir : "MODS");
         const auto installed = mods_dir / "SLICK_TEXTURES";
-        // In a source checkout the generator writes next to the test scripts, not the build.
-        const auto generated = mods_dir / ".." / ".." / "Slick-Test" / "MODS" / "SLICK_TEXTURES";
+        // In a source checkout the generator writes next to the handling scripts, not the build.
+        const auto gen_handling = mods_dir / ".." / ".." / "handling" / "MODS" / "SLICK_TEXTURES";
+        const auto gen_slick = mods_dir / ".." / ".." / "Slick-Test" / "MODS" / "SLICK_TEXTURES";
         std::error_code ec;
-        const auto source = stdfs::is_directory(installed, ec) ? installed : generated.lexically_normal();
+        const auto source = stdfs::is_directory(installed, ec) ? installed
+                          : stdfs::is_directory(gen_handling, ec) ? gen_handling.lexically_normal()
+                          : gen_slick.lexically_normal();
         add_pack_folder(ix, "SLICK_TEXTURES", source);
     }
     add_pack(ix, "F1CE_HELMET_PACK", "F1CE_HELMETS_DIR", "PLAYER_HELMETS");

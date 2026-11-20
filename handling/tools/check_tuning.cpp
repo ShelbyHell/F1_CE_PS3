@@ -6,10 +6,13 @@
 
 int main() {
     static_assert(slick::parse_preset("2026") == slick::Preset::modern);
+    static_assert(slick::parse_preset("modern") == slick::Preset::modern);
     static_assert(slick::parse_preset("w11") == slick::Preset::w11);
     static_assert(slick::parse_preset("handling") == slick::parse_preset("2026"));
     static_assert(slick::parse_preset("1") == slick::Preset::basic);
+    static_assert(slick::parse_preset("basic") == slick::Preset::basic);
     static_assert(slick::parse_preset("0") == slick::Preset::stock);
+    static_assert(slick::parse_preset("stock") == slick::Preset::stock);
     assert(slick::dry_wear_state(0x19, 1));
     assert(slick::dry_wear_state(0x3019, 1));
     assert(slick::dry_wear_state(0x19, 2));

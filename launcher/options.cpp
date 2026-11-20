@@ -263,25 +263,25 @@ std::vector<Option> make_options() {
                        {{"Game menu", nullptr}, {"Off", "0"}, {"On", "1"}}, 0, qr));
     v.push_back(choice(QUICK_RACE, "Penalties", "F1CE_QR_PENALTIES", {{"Game menu", nullptr}, {"Off", "0"}, {"On", "1"}},
                        0, qr));
-    v.push_back(header(QUICK_RACE, "Experimental slick tyres"));
-    v.push_back(choice(QUICK_RACE, "Slick physics", "F1CE_SLICK_TEST",
-                       {{"Stock", nullptr}, {"Basic slicks", "1"}, {"2026 (with handling)", "2026"}, {"2020 W11", "w11"}},
-                       0, "Experimental offline physics for dry tyres. Use Realistic tyre wear. Textures are a separate mod pack."));
-    v.push_back(greyed(choice(QUICK_RACE, "Slick compound", "F1CE_SLICK_COMPOUND",
+    v.push_back(header(QUICK_RACE, "Vehicle physics & handling"));
+    v.push_back(choice(QUICK_RACE, "Handling model", "F1CE_HANDLING",
+                       {{"Stock (2006 grooved)", nullptr}, {"Basic slicks", "1"}, {"Modern 2026 handling", "2026"}, {"2020 W11 handling", "w11"}},
+                       0, "Advanced offline vehicle physics and tyre model. Use Realistic tyre wear. Textures are in General settings."));
+    v.push_back(greyed(choice(QUICK_RACE, "Tyre compound", "F1CE_TYRE_COMPOUND",
                        {{"Baseline", nullptr}, {"Soft", "soft"}, {"Hard", "hard"}}, 0,
                        "Soft has more fresh grip and wears faster. Hard has less fresh grip and lasts longer."),
-                       "F1CE_SLICK_TEST", nullptr));
+                       "F1CE_HANDLING", nullptr));
     v.push_back(greyed(choice(QUICK_RACE, "Dirty air & slipstream", "F1CE_DIRTY_AIR",
                               {{"On", nullptr}, {"Off", "0"}}, 0,
                               "Simulates front downforce loss when following closely in corners, and slipstream boost on straights."),
-                       "F1CE_SLICK_TEST", nullptr));
+                       "F1CE_HANDLING", nullptr));
     v.push_back(greyed(choice(QUICK_RACE, "Brake bias", "F1CE_BRAKE_BIAS",
                               {{"56% (Balanced)", nullptr}, {"58% (Front / Stable)", "58"}, {"54% (Rear / Agile)", "54"}}, 0,
                               "Brake balance between front and rear axles. Affects trail braking rotation into corners."),
-                       "F1CE_SLICK_TEST", nullptr));
+                       "F1CE_HANDLING", nullptr));
     v.push_back(toggle(QUICK_RACE, "Tyre HUD widget", "F1CE_TYRE_HUD",
                        "In-game on-screen display showing individual tyre wear %, compound, slip indicator, speed and dirty air / slipstream status."));
-    v.push_back(toggle(QUICK_RACE, "Slick telemetry (CSV)", "F1CE_SLICK_TELEMETRY",
+    v.push_back(toggle(QUICK_RACE, "Physics telemetry (CSV)", "F1CE_TELEMETRY",
                        "Records player inputs, speed, wheelspin and wear at 10 Hz in slick_telemetry.csv. Works in Stock too."));
 
     // ---------------------------------------------------------------- Multiplayer (runtime/hle_net.cpp)
@@ -623,13 +623,22 @@ void load(const Ini& ini) {
     for (Option& o : g_options) {
         if (o.kind == CHOICE) {
             o.sel = o.def;
-            if (const std::string* v = ini.get("options", o.key)) {
-                const std::string_view saved = o.key == std::string_view("F1CE_SLICK_TEST") && *v == "handling" ? "2026" : std::string_view(*v);
+            const std::string* v = ini.get("options", o.key);
+            if (!v && o.key == std::string_view("F1CE_HANDLING")) v = ini.get("options", "F1CE_SLICK_TEST");
+            if (!v && o.key == std::string_view("F1CE_TYRE_COMPOUND")) v = ini.get("options", "F1CE_SLICK_COMPOUND");
+            if (v) {
+                const std::string_view saved = (o.key == std::string_view("F1CE_HANDLING") || o.key == std::string_view("F1CE_SLICK_TEST")) && *v == "handling" ? "2026" : std::string_view(*v);
                 for (size_t i = 0; i < o.choices.size(); i++)
                     if (o.choices[i].value && saved == o.choices[i].value) o.sel = (int)i;
             }
         } else if (o.kind == TOGGLE) {
-            o.sel = ini.get_int("options", o.key, 0) != 0;
+            if (o.key == std::string_view("F1CE_TELEMETRY")) {
+                int t = ini.get_int("options", "F1CE_TELEMETRY", -1);
+                if (t == -1) t = ini.get_int("options", "F1CE_SLICK_TELEMETRY", 0);
+                o.sel = t != 0;
+            } else {
+                o.sel = ini.get_int("options", o.key, 0) != 0;
+            }
         } else if (o.kind == TEXT) {
             o.text = ini.get("developer", o.key, "");
         }
@@ -646,10 +655,18 @@ void save(Ini& ini) {
     ini.set("game", "path", g_game_path);
     for (const Option& o : g_options) {
         if (o.kind == CHOICE) {
-            if (const char* v = value(o)) ini.set("options", o.key, v);
-            else ini.erase("options", o.key);   // (the default)
+            if (const char* v = value(o)) {
+                ini.set("options", o.key, v);
+                if (!strcmp(o.key, "F1CE_HANDLING")) ini.set("options", "F1CE_SLICK_TEST", v);
+                if (!strcmp(o.key, "F1CE_TYRE_COMPOUND")) ini.set("options", "F1CE_SLICK_COMPOUND", v);
+            } else {
+                ini.erase("options", o.key);   // (the default)
+                if (!strcmp(o.key, "F1CE_HANDLING")) ini.erase("options", "F1CE_SLICK_TEST");
+                if (!strcmp(o.key, "F1CE_TYRE_COMPOUND")) ini.erase("options", "F1CE_SLICK_COMPOUND");
+            }
         } else if (o.kind == TOGGLE) {
             ini.set("options", o.key, o.sel ? "1" : "0");
+            if (!strcmp(o.key, "F1CE_TELEMETRY")) ini.set("options", "F1CE_SLICK_TELEMETRY", o.sel ? "1" : "0");
         } else if (o.kind == TEXT) {
             if (o.text.empty()) ini.erase("developer", o.key);
             else ini.set("developer", o.key, o.text);
@@ -721,10 +738,17 @@ std::string start_game(Ini& ini, std::function<void(unsigned)> exited) {
             if (o.key[0] != '-' && strcmp(o.key, "extra")) set_env(o.key, nullptr);
             continue;
         }
-        if (o.kind == CHOICE && strcmp(o.key, "preset")) set_env(o.key, value(o));
+        if (o.kind == CHOICE && strcmp(o.key, "preset")) {
+            set_env(o.key, value(o));
+            if (!strcmp(o.key, "F1CE_HANDLING")) set_env("F1CE_SLICK_TEST", value(o));
+            if (!strcmp(o.key, "F1CE_TYRE_COMPOUND")) set_env("F1CE_SLICK_COMPOUND", value(o));
+        }
         if (o.kind == TOGGLE) {
             if (o.key[0] == '-') { if (o.sel) args.push_back(o.key); }
-            else set_env(o.key, o.sel ? o.on : nullptr);
+            else {
+                set_env(o.key, o.sel ? o.on : nullptr);
+                if (!strcmp(o.key, "F1CE_TELEMETRY")) set_env("F1CE_SLICK_TELEMETRY", o.sel ? o.on : nullptr);
+            }
         }
         if (o.kind == TEXT && strcmp(o.key, "extra")) set_env(o.key, o.text.empty() ? nullptr : o.text.c_str());
     }

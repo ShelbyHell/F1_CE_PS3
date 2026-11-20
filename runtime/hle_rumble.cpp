@@ -150,7 +150,8 @@ float slick::player_speed_kmh() {
 
 bool slick::telemetry_enabled() {
     static const bool enabled = [] {
-        const char* value = std::getenv("F1CE_SLICK_TELEMETRY");
+        const char* value = std::getenv("F1CE_TELEMETRY");
+        if (!value || !*value) value = std::getenv("F1CE_SLICK_TELEMETRY");
         return value && std::strcmp(value, "1") == 0;
     }();
     return enabled;

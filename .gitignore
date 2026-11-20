@@ -36,7 +36,12 @@ fp_*.glsl
 vp_*.glsl
 freeze_task*.bin
 
-# Local slick test builds, settings and textures generated from the game disc
+# Local vehicle handling builds, settings and textures generated from the game disc
+/handling/*.exe
+/handling/local.cmd
+/handling/shader_cache/
+/handling/MODS/
+/handling/Texture-Preview/
 /Slick-Test/*.exe
 /Slick-Test/local.cmd
 /Slick-Test/shader_cache/

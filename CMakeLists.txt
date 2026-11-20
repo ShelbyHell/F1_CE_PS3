@@ -262,3 +262,8 @@ if(F1CE_HOST STREQUAL "SDL")
     target_link_libraries(f1ce_launcher_new PRIVATE Threads::Threads)
   endif()
 endif()
+
+add_executable(check_tuning handling/tools/check_tuning.cpp)
+set_target_properties(check_tuning PROPERTIES COMPILE_OPTIONS "" LINK_OPTIONS "")
+target_include_directories(check_tuning PRIVATE runtime)
+

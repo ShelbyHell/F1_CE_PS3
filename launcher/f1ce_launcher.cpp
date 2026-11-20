@@ -181,10 +181,10 @@ Combo g_combos[] = {
     {L"Crash damage", L"F1CE_QR_DAMAGE", {{L"Game menu", nullptr}, {L"Off", L"0"}, {L"On", L"1"}}, 0, QR_RULES},
     {L"Component failure", L"F1CE_QR_FAILURES", {{L"Game menu", nullptr}, {L"Off", L"0"}, {L"On", L"1"}}, 0, QR_RULES},
     {L"Penalties", L"F1CE_QR_PENALTIES", {{L"Game menu", nullptr}, {L"Off", L"0"}, {L"On", L"1"}}, 0, QR_RULES},
-    {L"Slick physics", L"F1CE_SLICK_TEST",
-     {{L"Stock", nullptr}, {L"Basic slicks", L"1"}, {L"2026 (with handling)", L"2026"}, {L"2020 W11", L"w11"}}, 0, QR_RULES,
-     L"Experimental offline dry-tyre physics. Use Realistic tyre wear. Textures are a separate mod pack."},
-    {L"Slick compound", L"F1CE_SLICK_COMPOUND", {{L"Baseline", nullptr}, {L"Soft", L"soft"}, {L"Hard", L"hard"}}, 0, QR_RULES},
+    {L"Handling model", L"F1CE_HANDLING",
+     {{L"Stock (2006 grooved)", nullptr}, {L"Basic slicks", L"1"}, {L"Modern 2026 handling", L"2026"}, {L"2020 W11 handling", L"w11"}}, 0, QR_RULES,
+     L"Advanced offline vehicle handling and dry-tyre physics. Use Realistic tyre wear. Textures are in General settings."},
+    {L"Tyre compound", L"F1CE_TYRE_COMPOUND", {{L"Baseline", nullptr}, {L"Soft", L"soft"}, {L"Hard", L"hard"}}, 0, QR_RULES},
     {L"Dirty air & slipstream", L"F1CE_DIRTY_AIR", {{L"On", nullptr}, {L"Off", L"0"}}, 0, QR_RULES,
      L"Simulates front downforce loss when following closely in corners, and slipstream boost on straights."},
     {L"Brake bias", L"F1CE_BRAKE_BIAS",
@@ -192,7 +192,7 @@ Combo g_combos[] = {
      L"Brake balance between front and rear axles for trail braking."},
     {L"Tyre HUD widget", L"F1CE_TYRE_HUD", {{L"Off", nullptr}, {L"On", L"1"}}, 0, QR_RULES,
      L"In-game tyre wear, compound, slip, speed and slipstream / dirty air HUD overlay."},
-    {L"Slick telemetry (CSV)", L"F1CE_SLICK_TELEMETRY", {{L"Off", nullptr}, {L"On", L"1"}}, 0, QR_RULES,
+    {L"Physics telemetry (CSV)", L"F1CE_TELEMETRY", {{L"Off", nullptr}, {L"On", L"1"}}, 0, QR_RULES,
      L"Write player inputs, speed, wheelspin and tyre wear to slick_telemetry.csv at 10 Hz, including in Stock."},
     // Developer Tools
     {L"F1CE_PIN", L"F1CE_PIN", {{L"Default", nullptr}, {L"0: no pinning", L"0"}, {L"1: main PPU too", L"1"}}, 0, DEV_TIMING},
@@ -500,7 +500,13 @@ void load_settings() {
     SetWindowTextW(g_path, b);
     for (Combo& c : g_combos) {
         GetPrivateProfileStringW(L"options", c.env, L"", b, MAX_PATH * 2, g_ini.c_str());
-        const wchar_t* saved = !wcscmp(c.env, L"F1CE_SLICK_TEST") && !wcscmp(b, L"handling") ? L"2026" : b;
+        if (!b[0] && !wcscmp(c.env, L"F1CE_HANDLING"))
+            GetPrivateProfileStringW(L"options", L"F1CE_SLICK_TEST", L"", b, MAX_PATH * 2, g_ini.c_str());
+        if (!b[0] && !wcscmp(c.env, L"F1CE_TYRE_COMPOUND"))
+            GetPrivateProfileStringW(L"options", L"F1CE_SLICK_COMPOUND", L"", b, MAX_PATH * 2, g_ini.c_str());
+        if (!b[0] && !wcscmp(c.env, L"F1CE_TELEMETRY"))
+            GetPrivateProfileStringW(L"options", L"F1CE_SLICK_TELEMETRY", L"", b, MAX_PATH * 2, g_ini.c_str());
+        const wchar_t* saved = (!wcscmp(c.env, L"F1CE_HANDLING") || !wcscmp(c.env, L"F1CE_SLICK_TEST")) && !wcscmp(b, L"handling") ? L"2026" : b;
         int sel = c.def;
         for (size_t i = 0; i < c.choices.size(); i++)
             if (c.choices[i].value && !wcscmp(c.choices[i].value, saved)) sel = (int)i;
@@ -532,6 +538,9 @@ void save_settings() {
     for (Combo& c : g_combos) {
         const wchar_t* v = c.choices[SendMessageW(c.h, CB_GETCURSEL, 0, 0)].value;   // (nullptr deletes the key: default)
         WritePrivateProfileStringW(L"options", c.env, v, g_ini.c_str());
+        if (!wcscmp(c.env, L"F1CE_HANDLING")) WritePrivateProfileStringW(L"options", L"F1CE_SLICK_TEST", v, g_ini.c_str());
+        if (!wcscmp(c.env, L"F1CE_TYRE_COMPOUND")) WritePrivateProfileStringW(L"options", L"F1CE_SLICK_COMPOUND", v, g_ini.c_str());
+        if (!wcscmp(c.env, L"F1CE_TELEMETRY")) WritePrivateProfileStringW(L"options", L"F1CE_SLICK_TELEMETRY", v, g_ini.c_str());
     }
     WritePrivateProfileStringW(L"options", L"F1CE_CUBE_STATIC", nullptr, g_ini.c_str());   // (now the Reflections combo)
     if (selection(*find_combo(PRESET_KEY)) == PRESET_CUSTOM) save_custom();
@@ -604,8 +613,12 @@ void start_game() {
     set_gpu_preference(exe);
     std::wstring cmd = L"\"" + exe + L"\" \"" + game + L"\"";
     // the variable is cleared when unset here: some options act as soon as it exists, whatever its value
-    for (Combo& c : g_combos)
+    for (Combo& c : g_combos) {
         if (wcscmp(c.env, PRESET_KEY)) SetEnvironmentVariableW(c.env, selected_value(c));
+        if (!wcscmp(c.env, L"F1CE_HANDLING")) SetEnvironmentVariableW(L"F1CE_SLICK_TEST", selected_value(c));
+        if (!wcscmp(c.env, L"F1CE_TYRE_COMPOUND")) SetEnvironmentVariableW(L"F1CE_SLICK_COMPOUND", selected_value(c));
+        if (!wcscmp(c.env, L"F1CE_TELEMETRY")) SetEnvironmentVariableW(L"F1CE_SLICK_TELEMETRY", selected_value(c));
+    }
     SetEnvironmentVariableW(L"F1CE_MODS_DIR", mods_dir().c_str());
     SetEnvironmentVariableW(L"F1CE_HELMETS_DIR", helmets_dir().c_str());
     SetEnvironmentVariableW(L"F1CE_ENV_DIR", environments_dir().c_str());

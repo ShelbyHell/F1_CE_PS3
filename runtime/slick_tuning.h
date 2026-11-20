@@ -38,14 +38,15 @@ enum class Preset { stock, basic, modern, w11 };
 
 inline constexpr Preset parse_preset(std::string_view mode) {
     if (mode == "w11") return Preset::w11;
-    if (mode == "2026" || mode == "handling") return Preset::modern;
-    if (mode == "1") return Preset::basic;
+    if (mode == "2026" || mode == "handling" || mode == "modern") return Preset::modern;
+    if (mode == "1" || mode == "basic") return Preset::basic;
     return Preset::stock;
 }
 
 inline Preset selected_preset() {
     static const Preset preset = [] {
-        const char* mode = std::getenv("F1CE_SLICK_TEST");
+        const char* mode = std::getenv("F1CE_HANDLING");
+        if (!mode || !*mode) mode = std::getenv("F1CE_SLICK_TEST");
         return parse_preset(mode ? mode : "");
     }();
     return preset;
@@ -132,7 +133,8 @@ enum class Compound { baseline, soft, hard };
 
 inline Compound selected_compound() {
     static const Compound value = [] {
-        const char* name = std::getenv("F1CE_SLICK_COMPOUND");
+        const char* name = std::getenv("F1CE_TYRE_COMPOUND");
+        if (!name || !*name) name = std::getenv("F1CE_SLICK_COMPOUND");
         if (name && std::strcmp(name, "soft") == 0) return Compound::soft;
         if (name && std::strcmp(name, "hard") == 0) return Compound::hard;
         return Compound::baseline;
