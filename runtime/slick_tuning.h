@@ -289,4 +289,12 @@ inline std::atomic<unsigned>& player_car_ref() {
 
 inline void set_player_car(unsigned car) { player_car_ref().store(car, std::memory_order_relaxed); }
 inline unsigned player_car() { return player_car_ref().load(std::memory_order_relaxed); }
+
+inline bool tyre_hud_enabled() {
+    static const bool enabled = [] {
+        const char* val = std::getenv("F1CE_TYRE_HUD");
+        return val && std::strcmp(val, "1") == 0;
+    }();
+    return enabled;
+}
 }

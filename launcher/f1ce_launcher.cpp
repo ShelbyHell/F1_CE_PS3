@@ -190,6 +190,8 @@ Combo g_combos[] = {
     {L"Brake bias", L"F1CE_BRAKE_BIAS",
      {{L"56% (Balanced)", nullptr}, {L"58% (Front / Stable)", L"58"}, {L"54% (Rear / Agile)", L"54"}}, 0, QR_RULES,
      L"Brake balance between front and rear axles for trail braking."},
+    {L"Tyre HUD widget", L"F1CE_TYRE_HUD", {{L"Off", nullptr}, {L"On", L"1"}}, 0, QR_RULES,
+     L"In-game tyre wear, compound, slip, speed and slipstream / dirty air HUD overlay."},
     {L"Slick telemetry (CSV)", L"F1CE_SLICK_TELEMETRY", {{L"Off", nullptr}, {L"On", L"1"}}, 0, QR_RULES,
      L"Write player inputs, speed, wheelspin and tyre wear to slick_telemetry.csv at 10 Hz, including in Stock."},
     // Developer Tools

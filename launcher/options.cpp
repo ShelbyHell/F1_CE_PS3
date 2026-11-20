@@ -279,6 +279,8 @@ std::vector<Option> make_options() {
                               {{"56% (Balanced)", nullptr}, {"58% (Front / Stable)", "58"}, {"54% (Rear / Agile)", "54"}}, 0,
                               "Brake balance between front and rear axles. Affects trail braking rotation into corners."),
                        "F1CE_SLICK_TEST", nullptr));
+    v.push_back(toggle(QUICK_RACE, "Tyre HUD widget", "F1CE_TYRE_HUD",
+                       "In-game on-screen display showing individual tyre wear %, compound, slip indicator, speed and dirty air / slipstream status."));
     v.push_back(toggle(QUICK_RACE, "Slick telemetry (CSV)", "F1CE_SLICK_TELEMETRY",
                        "Records player inputs, speed, wheelspin and wear at 10 Hz in slick_telemetry.csv. Works in Stock too."));
 

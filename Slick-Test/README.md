@@ -54,6 +54,15 @@ Corner entry under braking dynamically evaluates load transfer across axles:
 - **Inside Wheel Lockup / Scrub:** Over-braking into a turn with an unloaded inside front tyre causes progressive grip scrub and understeer.
 - **Brake Bias:** Configurable via launcher or `F1CE_BRAKE_BIAS` (default `56` for 56% front; `58` for high-speed stability; `54` for agile low-speed rotation).
 
+### In-Game Tyre HUD Widget
+
+Enable **Tyre HUD widget** in the launcher or set `F1CE_TYRE_HUD=1`. A compact on-screen dashboard displays in the lower right during race sessions:
+- Four individual tyre temperature & wear blocks (FL, FR, RL, RR) with percentage life remaining.
+- Real-time colour coding (green for fresh, amber for worn, red for critical).
+- White flashing borders when wheelspin or lockup slip occurs.
+- Active compound badge (Soft, Hard, Slick) and aerodynamic status indicator (`CLEAN`, `WAKE -4%`, `TOW +6%`).
+- Current gear and telemetry speed. Rendered with premultiplied alpha overlay and zero gamepad interference.
+
 ### Dry compounds
 
 Set `F1CE_SLICK_COMPOUND=soft` or `hard` before launch (or in `local.cmd`). Leave it unset for the baseline. This is a session-wide preset for eligible dry tyres, not an extra compound choice in the game's pit menu. It has no effect with stock physics.

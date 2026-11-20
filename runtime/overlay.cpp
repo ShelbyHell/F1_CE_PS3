@@ -10,6 +10,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <ctime>
 #include <unordered_map>
@@ -17,6 +18,7 @@
 #include "font_black_italic.h"
 #include "font_medium.h"
 #include "font_semibold_italic.h"
+#include "slick_tuning.h"
 
 namespace overlay {
 namespace {
@@ -513,6 +515,96 @@ void draw(ImDrawList* dl, float W, float H) {
     }
 }
 
+void draw_tyre_hud(ImDrawList* dl, float W, float H) {
+    const unsigned car = slick::player_car();
+    if (!car) return;
+
+    const float S = std::clamp(H / 720.0f, 0.70f, 1.40f);
+    const float box_w = 175.0f * S, box_h = 135.0f * S;
+    const float pad_right = 20.0f * S, pad_bottom = 20.0f * S;
+    const float x0 = W - box_w - pad_right, y0 = H - box_h - pad_bottom;
+    const float x1 = x0 + box_w, y1 = y0 + box_h;
+
+    // Semi-transparent dark background panel with rounded corners and border
+    dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), IM_COL32(10, 12, 16, 205), 8.0f * S);
+    dl->AddRect(ImVec2(x0, y0), ImVec2(x1, y1), IM_COL32(70, 75, 85, 230), 8.0f * S, 0, 1.5f);
+
+    // Header: compound badge & wake status
+    const auto compound = slick::selected_compound();
+    const char* c_name = compound == slick::Compound::soft ? "SOFT" : compound == slick::Compound::hard ? "HARD" : "SLICK";
+    const ImU32 c_col = compound == slick::Compound::soft ? IM_COL32(235, 45, 45, 255)
+                      : compound == slick::Compound::hard ? IM_COL32(235, 235, 235, 255)
+                      : IM_COL32(245, 195, 35, 255);
+
+    text(dl, F.black, 13.0f * S, ImVec2(x0 + 10.0f * S, y0 + 8.0f * S), c_col, c_name);
+
+    const auto wake = slick::current_wake();
+    if (wake.in_slipstream) {
+        text(dl, F.semi, 11.5f * S, ImVec2(x0 + 65.0f * S, y0 + 9.0f * S), IM_COL32(0, 230, 255, 255), "TOW +6%");
+    } else if (wake.intensity > 0.15f) {
+        text(dl, F.semi, 11.5f * S, ImVec2(x0 + 65.0f * S, y0 + 9.0f * S), IM_COL32(255, 140, 20, 255), "WAKE -4%");
+    } else {
+        text(dl, F.semi, 11.5f * S, ImVec2(x0 + 65.0f * S, y0 + 9.0f * S), IM_COL32(60, 215, 80, 255), "CLEAN");
+    }
+
+    // Tyre blocks: FL, FR, RL, RR
+    const u32 slip = (ld32(car + 0x97c) >> 8) & 0xf;
+    const float tw = 32.0f * S, th = 34.0f * S;
+    const float cx = x0 + box_w * 0.5f;
+    const float fl_x = cx - tw - 12.0f * S, fr_x = cx + 12.0f * S;
+    const float f_y = y0 + 28.0f * S, r_y = y0 + 68.0f * S;
+
+    const float xs[4] = {fl_x, fr_x, fl_x, fr_x};
+    const float ys[4] = {f_y, f_y, r_y, r_y};
+
+    for (int w = 0; w < 4; ++w) {
+        const float wear = std::bit_cast<float>(ld32(car + 0x8b0 + 4 * w));
+        const float worn_pct = std::clamp(wear / 0.65f * 100.0f, 0.0f, 100.0f);
+        const float life_pct = 100.0f - worn_pct;
+        const bool slipping = ((slip >> w) & 1) != 0;
+
+        ImU32 tyre_col;
+        if (worn_pct < 30.0f) {
+            tyre_col = IM_COL32(40, 195, 75, 230);
+        } else if (worn_pct < 65.0f) {
+            tyre_col = IM_COL32(235, 175, 25, 230);
+        } else {
+            tyre_col = IM_COL32(220, 45, 45, 230);
+        }
+
+        const ImVec2 p0(xs[w], ys[w]), p1(xs[w] + tw, ys[w] + th);
+        dl->AddRectFilled(p0, p1, tyre_col, 4.0f * S);
+
+        if (slipping) {
+            dl->AddRect(p0, p1, IM_COL32(255, 255, 255, 255), 4.0f * S, 0, 2.0f * S);
+        } else {
+            dl->AddRect(p0, p1, IM_COL32(20, 25, 30, 200), 4.0f * S, 0, 1.0f);
+        }
+
+        char pct_str[8];
+        snprintf(pct_str, sizeof(pct_str), "%.0f%%", life_pct);
+        const float str_w = text_w(F.semi, 10.0f * S, pct_str);
+        text(dl, F.semi, 10.0f * S, ImVec2(xs[w] + (tw - str_w) * 0.5f, ys[w] + (th - 10.0f * S) * 0.5f),
+             IM_COL32(10, 10, 10, 255), pct_str);
+    }
+
+    // Car silhouette / center spine
+    dl->AddLine(ImVec2(cx, f_y + 4.0f * S), ImVec2(cx, r_y + th - 4.0f * S), IM_COL32(100, 105, 115, 180), 2.0f * S);
+
+    // Bottom telemetry line: speed and gear
+    const float kmh = std::max(slick::player_speed_kmh(), 0.0f);
+    const int gear = (int)(s8)ld8(car + 0x9b8);
+    char g_str[8];
+    if (gear == 0) snprintf(g_str, sizeof(g_str), "N");
+    else if (gear < 0) snprintf(g_str, sizeof(g_str), "R");
+    else snprintf(g_str, sizeof(g_str), "G%d", gear);
+
+    char foot[32];
+    snprintf(foot, sizeof(foot), "%s   %.0f KM/H", g_str, kmh);
+    const float fw = text_w(F.semi, 11.0f * S, foot);
+    text(dl, F.semi, 11.0f * S, ImVec2(x0 + (box_w - fw) * 0.5f, y0 + 110.0f * S), IM_COL32(200, 205, 215, 240), foot);
+}
+
 // ------------------------------------------------------------------ frame
 Target g_target;
 std::unordered_map<ImTextureData*, SoftTex> g_texes;   // ImGui's textures (the font atlas): their pixels as ImGui keeps them
@@ -540,19 +632,40 @@ bool frame(u32 win_w, u32 win_h, Image* out) {
     static u64 last = 0;
     const u64 now = time_usec();
     g_last_frame = now;
-    if (!g_open.load() || !win_w || !win_h) return false;
-    std::lock_guard lk(g_m);
-    if (g_st.kind == Kind::None) return false;
+    if (!win_w || !win_h) return false;
+
+    const bool dialog_open = g_open.load();
+    const bool hud_active = slick::tyre_hud_enabled() && slick::player_car() != 0 && slick::player_speed_kmh() >= 0.0f;
+
+    if (!dialog_open && !hud_active) return false;
+
     static bool inited = false;
     if (!inited) { imgui_init(); inited = true; }
-    update(pressed(g_st.serial));
-    if (g_st.kind == Kind::None) return false;   // answered
+
+    bool has_dialog = false;
+    if (dialog_open) {
+        std::lock_guard lk(g_m);
+        if (g_st.kind != Kind::None) {
+            update(pressed(g_st.serial));
+            has_dialog = (g_st.kind != Kind::None);
+        }
+    }
+
+    if (!has_dialog && !hud_active) return false;
+
     ImGuiIO& io = ImGui::GetIO();
     io.DisplaySize = ImVec2((float)win_w, (float)win_h);
     io.DeltaTime = last && now > last ? std::min((now - last) / 1e6f, 0.25f) : 1.0f / 60.0f;
     last = now;
     ImGui::NewFrame();
-    draw(ImGui::GetForegroundDrawList(), (float)win_w, (float)win_h);
+
+    if (has_dialog) {
+        std::lock_guard lk(g_m);
+        draw(ImGui::GetForegroundDrawList(), (float)win_w, (float)win_h);
+    } else if (hud_active) {
+        draw_tyre_hud(ImGui::GetForegroundDrawList(), (float)win_w, (float)win_h);
+    }
+
     ImGui::Render();
     ImDrawData* dd = ImGui::GetDrawData();
     bool tex_changed = false;
