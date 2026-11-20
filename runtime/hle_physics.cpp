@@ -70,7 +70,7 @@ void slick_grip_probe(PPUContext& c) {
     const u32 car = (u32)c.r[31];
     const auto preset = slick_test_car(car);
     if (preset == slick::Preset::stock) return;
-    const float speed = std::bit_cast<float>(ld32(car + slick::CarOffset::Speed));
+    const float speed = ldf32(car + slick::CarOffset::Speed);
     // This vector is computed afresh, then stored at car + 0x4d0.
     float front = 1.05f, rear = 1.05f;
     if ((preset == slick::Preset::modern || preset == slick::Preset::w11) && speed >= 0.0f) {
@@ -79,12 +79,12 @@ void slick_grip_probe(PPUContext& c) {
         rear = balance.rear;
     }
     if (car == slick::player_car() && slick::dirty_air_enabled() && speed > 5.0f) {
-        const slick::Vec3 p_pos{std::bit_cast<float>(ld32(car + slick::CarOffset::Position)),
-                                std::bit_cast<float>(ld32(car + slick::CarOffset::Position + 4)),
-                                std::bit_cast<float>(ld32(car + slick::CarOffset::Position + 8))};
-        const slick::Vec3 p_fwd{std::bit_cast<float>(ld32(car + slick::CarOffset::FwdVector)),
-                                std::bit_cast<float>(ld32(car + slick::CarOffset::FwdVector + 4)),
-                                std::bit_cast<float>(ld32(car + slick::CarOffset::FwdVector + 8))};
+        const slick::Vec3 p_pos{ldf32(car + slick::CarOffset::Position),
+                                ldf32(car + slick::CarOffset::Position + 4),
+                                ldf32(car + slick::CarOffset::Position + 8)};
+        const slick::Vec3 p_fwd{ldf32(car + slick::CarOffset::FwdVector),
+                                ldf32(car + slick::CarOffset::FwdVector + 4),
+                                ldf32(car + slick::CarOffset::FwdVector + 8)};
         std::array<slick::Vec3, 32> others;
         size_t o_count = 0;
         const size_t count = g_car_count.load(std::memory_order_relaxed);
@@ -93,9 +93,9 @@ void slick_grip_probe(PPUContext& c) {
             const u32 other = g_all_cars[i].car;
             // Only consider rival cars active within the last 1 second
             if (other && other != car && (now - g_all_cars[i].last_seen_us < 1000000)) {
-                others[o_count++] = {std::bit_cast<float>(ld32(other + slick::CarOffset::Position)),
-                                     std::bit_cast<float>(ld32(other + slick::CarOffset::Position + 4)),
-                                     std::bit_cast<float>(ld32(other + slick::CarOffset::Position + 8))};
+                others[o_count++] = {ldf32(other + slick::CarOffset::Position),
+                                     ldf32(other + slick::CarOffset::Position + 4),
+                                     ldf32(other + slick::CarOffset::Position + 8)};
             }
         }
         const auto wake = slick::evaluate_wake(p_pos, p_fwd, others.data(), o_count, speed * 3.6f, 0.0f);
@@ -108,17 +108,17 @@ void slick_grip_probe(PPUContext& c) {
     }
     slick::TrailBrakeEffect trail{};
     if (car == slick::player_car() && (preset == slick::Preset::modern || preset == slick::Preset::w11)) {
-        const float l0 = std::bit_cast<float>(ld32(car + slick::CarOffset::WheelLoads));
-        const float l1 = std::bit_cast<float>(ld32(car + slick::CarOffset::WheelLoads + 4));
-        const float l2 = std::bit_cast<float>(ld32(car + slick::CarOffset::WheelLoads + 8));
-        const float l3 = std::bit_cast<float>(ld32(car + slick::CarOffset::WheelLoads + 12));
+        const float l0 = ldf32(car + slick::CarOffset::WheelLoads);
+        const float l1 = ldf32(car + slick::CarOffset::WheelLoads + 4);
+        const float l2 = ldf32(car + slick::CarOffset::WheelLoads + 8);
+        const float l3 = ldf32(car + slick::CarOffset::WheelLoads + 12);
         trail = slick::trail_brake_grip(speed * 3.6f, slick::player_pad_steer(), l0, l1, l2, l3, slick::selected_brake_bias());
     }
     const auto compound = slick::selected_compound();
     const float trail_mults[4] = {trail.fl_mult, trail.fr_mult, trail.rl_mult, trail.rr_mult};
     // Guest lanes 0/1 are the front axle; VMX stores lane 0 at f[3].
     for (int wheel = 0; wheel < 4; ++wheel) {
-        const float wear = compound == slick::Compound::baseline ? 0.0f : std::bit_cast<float>(ld32(car + slick::CarOffset::TyreWear + 4 * wheel));
+        const float wear = compound == slick::Compound::baseline ? 0.0f : ldf32(car + slick::CarOffset::TyreWear + 4 * wheel);
         c.v[0].f[3 - wheel] *= (wheel < 2 ? front : rear) * slick::compound_grip(compound, wear) * trail_mults[wheel];
     }
     static std::atomic_flag logged{};
@@ -142,8 +142,8 @@ void slick_drive_probe(PPUContext& c) {
     if (now - it->seen > 500000) it->response = {};
     it->seen = now;
     const u32 gear = ld8(car + slick::CarOffset::Gear);
-    const float speed = std::bit_cast<float>(ld32(car + slick::CarOffset::Speed)) * 3.6f;
-    const float throttle = std::bit_cast<float>(ld32(car + slick::CarOffset::Throttle));
+    const float speed = ldf32(car + slick::CarOffset::Speed) * 3.6f;
+    const float throttle = ldf32(car + slick::CarOffset::Throttle);
     if (gear == 0 || gear > 7 || (ld32(car + slick::CarOffset::WheelContact) & 0xc) != 0xc || !(c.f[7].d > 0.0)
         || !(speed >= 15.0f && speed < 280.0f && throttle > 0.45f)) {
         it->response = {};

@@ -36,7 +36,7 @@ HLE_FUNC(cellPadGetData) {
     if (overlay::input_captured()) s = {};   // a system dialog (overlay.h) has the pad
     if (!g_online_image) {
         quick_race_overrides(s.digital1, s.lx, s.ly);   // (EBOOT addresses)
-        if (slick::telemetry_enabled()) slick::telemetry_pad_axis(s.lx);
+        slick::telemetry_pad_axis(s.lx);
     }
     rumble_update();
     st32(p, 24);
