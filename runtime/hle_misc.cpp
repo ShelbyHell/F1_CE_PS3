@@ -37,6 +37,13 @@ HLE_FUNC(cellPadGetData) {
     if (!g_online_image) {
         quick_race_overrides(s.digital1, s.lx, s.ly);   // (EBOOT addresses)
         slick::telemetry_pad_axis(s.lx);
+        auto& inputs = slick::player_pad_inputs();
+        const float thr = std::max((float)s.pressure[11], (float)s.pressure[6]) / 255.0f;
+        const float brk = std::max((float)s.pressure[10], (float)s.pressure[7]) / 255.0f;
+        const bool triangle = (s.digital2 & 0x10) != 0;
+        inputs.throttle.store(thr, std::memory_order_relaxed);
+        inputs.brake.store(brk, std::memory_order_relaxed);
+        inputs.btn_triangle.store(triangle, std::memory_order_relaxed);
     }
     rumble_update();
     st32(p, 24);
@@ -335,6 +342,7 @@ void audio_loop() {
                 st64(g_read_index_addr + i * 8, (idx + 1) % p.nblock);
             }
         }
+        slick::render_audio_effects(mix.data(), BLOCK_SAMPLES);
         wav_write(mix.data(), BLOCK_SAMPLES);
         const int q = host::audio_queued_ms();
         if (pushed && q == 0) st.underruns++;

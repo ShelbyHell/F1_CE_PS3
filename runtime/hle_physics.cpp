@@ -163,10 +163,32 @@ void slick_grip_probe(PPUContext& c) {
     const float throttle_val = ldf32(car + slick::CarOffset::Throttle);
     const u32 slip_mask = (ld32(car + slick::CarOffset::WheelSlip) >> 8) & 0xf;
 
+    const float pad_brake = (car == slick::player_car()) ? slick::player_pad_inputs().brake.load(std::memory_order_relaxed) : 0.0f;
+    const float l0 = ldf32(car + slick::CarOffset::WheelLoads);
+    const float l1 = ldf32(car + slick::CarOffset::WheelLoads + 4);
+    const float l2 = ldf32(car + slick::CarOffset::WheelLoads + 8);
+    const float l3 = ldf32(car + slick::CarOffset::WheelLoads + 12);
+    const float front_tot = l0 + l1, rear_tot = l2 + l3, tot_load = front_tot + rear_tot;
+    const float load_brake = (tot_load > 500.0f && front_tot / tot_load > 0.52f) ? std::clamp((front_tot / tot_load - 0.52f) / 0.16f, 0.0f, 1.0f) : 0.0f;
+    const float brake_demand = std::max(pad_brake, load_brake);
+    const float bias = slick::selected_brake_bias();
+
     for (int wheel = 0; wheel < 4; ++wheel) {
         const float load = ldf32(car + slick::CarOffset::WheelLoads + 4 * wheel);
         const bool slipping = ((slip_mask >> wheel) & 1) != 0;
+        const float axle_bias = (wheel < 2) ? bias : (1.0f - bias);
+        thermal.brakes[wheel].step(dt, speed, brake_demand, axle_bias, load);
+        if (thermal.brakes[wheel].temp > 500.0f) {
+            thermal.wheels[wheel].carcass += 0.045f * ((thermal.brakes[wheel].temp - 500.0f) / 500.0f) * dt;
+        }
         thermal.wheels[wheel].step(dt, speed, load, slipping, steer_input, throttle_val, wheel < 2, compound);
+    }
+
+    float brake_mults[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    if (brake_demand > 0.05f) {
+        for (int w = 0; w < 4; ++w) {
+            brake_mults[w] = slick::brake_fade_factor(thermal.brakes[w].temp);
+        }
     }
 
     if (car == slick::player_car()) {
@@ -175,14 +197,40 @@ void slick_grip_probe(PPUContext& c) {
             p_telem.temps[wheel].store(thermal.wheels[wheel].temp(), std::memory_order_relaxed);
             p_telem.surface_temps[wheel].store(thermal.wheels[wheel].surface, std::memory_order_relaxed);
             p_telem.carcass_temps[wheel].store(thermal.wheels[wheel].carcass, std::memory_order_relaxed);
+            p_telem.brake_temps[wheel].store(thermal.brakes[wheel].temp, std::memory_order_relaxed);
         }
+        p_telem.throttle.store(throttle_val, std::memory_order_relaxed);
+        p_telem.brake.store(brake_demand, std::memory_order_relaxed);
+
+        const slick::Vec3 p_fwd{ldf32(car + slick::CarOffset::FwdVector),
+                                ldf32(car + slick::CarOffset::FwdVector + 4),
+                                ldf32(car + slick::CarOffset::FwdVector + 8)};
+        auto& gf = slick::player_gforce_tracker();
+        gf.update(dt, speed, p_fwd);
+        p_telem.g_lat.store(gf.g_lat, std::memory_order_relaxed);
+        p_telem.g_long.store(gf.g_long, std::memory_order_relaxed);
+
+        auto& drs = slick::global_drs_controller();
+        const bool btn_drs = slick::player_pad_inputs().btn_triangle.load(std::memory_order_relaxed);
+        const auto prev_drs = drs.state;
+        drs.update(dt, speed * 3.6f, throttle_val, steer_input, brake_demand, slick::current_wake(),
+                   btn_drs, slick::drs_auto_mode(), slick::drs_enabled() && (preset == slick::Preset::modern || preset == slick::Preset::w11));
+        p_telem.drs_state.store((int)drs.state, std::memory_order_relaxed);
+        if (drs.state != prev_drs && (drs.state == slick::DrsState::Available || drs.state == slick::DrsState::Open)) {
+            slick::global_audio_synth().trigger_drs_beep();
+        }
+
+        const float omega = ldf32(car + slick::CarOffset::EngineOmega);
+        const float rpm = omega * 9.549297f;
+        const int gear = (int)(s8)ld8(car + slick::CarOffset::Gear);
+        slick::global_audio_synth().step_engine(dt, rpm, throttle_val, gear);
     }
 
     // Guest lanes 0/1 are the front axle; VMX stores lane 0 at f[3].
     for (int wheel = 0; wheel < 4; ++wheel) {
         const float wear = compound == slick::Compound::baseline ? 0.0f : ldf32(car + slick::CarOffset::TyreWear + 4 * wheel);
         const float therm_grip = slick::thermal_grip_factor(compound, thermal.wheels[wheel].temp());
-        c.v[0].f[3 - wheel] *= (wheel < 2 ? front : rear) * slick::compound_grip(compound, wear) * trail_mults[wheel] * therm_grip;
+        c.v[0].f[3 - wheel] *= (wheel < 2 ? front : rear) * slick::compound_grip(compound, wear) * trail_mults[wheel] * therm_grip * brake_mults[wheel];
     }
     static std::atomic_flag logged{};
     if (!logged.test_and_set(std::memory_order_relaxed))
@@ -207,21 +255,24 @@ void slick_drive_probe(PPUContext& c) {
     const u32 gear = ld8(car + slick::CarOffset::Gear);
     const float speed = ldf32(car + slick::CarOffset::Speed) * 3.6f;
     const float throttle = ldf32(car + slick::CarOffset::Throttle);
+    const bool drs_open = (car == slick::player_car() && slick::current_drs_state() == slick::DrsState::Open);
+    const float max_speed = drs_open ? 345.0f : 280.0f;
     if (gear == 0 || gear > 7 || (ld32(car + slick::CarOffset::WheelContact) & 0xc) != 0xc || !(c.f[7].d > 0.0)
-        || !(speed >= 15.0f && speed < 280.0f && throttle > 0.45f)) {
+        || !(speed >= 15.0f && speed < max_speed && throttle > 0.45f)) {
         it->response = {};
         return;
     }
     // Increase only positive engine output, before the stock clutch/gear and tyre solver.
     const float draft = slick::slipstream_boost(slick::current_wake(), speed, throttle);
-    const float ceiling = slick::drive_boost_ceiling(preset, speed, throttle) + draft;
+    const float drs_boost = drs_open ? 0.12f : 0.0f;
+    const float ceiling = slick::drive_boost_ceiling(preset, speed, throttle) + draft + drs_boost;
     const float boost = it->response.step(ceiling, (ld32(car + slick::CarOffset::WheelSlip) & 0xc00) != 0);
     if (!(boost > 0.0f)) return;
     c.f[7].d = (float)c.f[7].d * (1.0f + boost);
     static std::atomic_flag logged{};
     if (boost >= 0.001f && !logged.test_and_set(std::memory_order_relaxed))
-        LOG_I("slick test: %s drive active, +%.1f%% at %.0f km/h", preset == slick::Preset::w11 ? "W11" : "2026",
-              boost * 100.0f, speed);
+        LOG_I("slick test: %s drive active (%s%s), +%.1f%% at %.0f km/h", preset == slick::Preset::w11 ? "W11" : "2026",
+              drs_open ? "DRS+DRIVE" : "DRIVE", draft > 0.001f ? "+DRAFT" : "", boost * 100.0f, speed);
 }
 
 // Debug: F1CE_PHYS_SNAP=<s>,<car hex>: <s> seconds into the first 3D scene, that car object (0x1390 bytes) and its body

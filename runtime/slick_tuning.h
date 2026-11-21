@@ -264,8 +264,112 @@ struct WheelThermal {
     }
 };
 
+struct Vec3 { float x = 0.0f, y = 0.0f, z = 0.0f; };
+
+struct WakeInfo {
+    float dist_ahead = 999.0f;
+    float lateral_offset = 0.0f;
+    float intensity = 0.0f;
+    bool in_slipstream = false;
+};
+
+struct RgbaColor {
+    uint8_t r = 0, g = 0, b = 0, a = 255;
+};
+
+struct BrakeDiscThermal {
+    float temp = 450.0f; // Carbon-Carbon disc temp in °C
+
+    void step(float dt, float speed_mps, float brake_demand, float axle_bias, float load_n) {
+        constexpr float T_amb = 30.0f;
+        const float v = std::max(speed_mps, 0.0f);
+        const float load_norm = std::clamp(load_n / 3500.0f, 0.2f, 2.0f);
+
+        // Heat generation under braking: P = k * brake * speed * load * bias
+        float heat = 0.0f;
+        if (brake_demand > 0.02f) {
+            heat = 420.0f * brake_demand * (v / 50.0f) * load_norm * (axle_bias / 0.5f);
+        }
+
+        // Forced duct cooling proportional to speed
+        const float h_duct = 0.0035f + 0.00018f * v;
+        const float cool_duct = h_duct * (temp - T_amb);
+
+        // Stefan-Boltzmann radiation cooling: emissive at high temp
+        const float t_k = (temp + 273.15f) * 0.001f;
+        const float t_amb_k = (T_amb + 273.15f) * 0.001f;
+        const float cool_rad = 0.045f * (t_k * t_k * t_k * t_k - t_amb_k * t_amb_k * t_amb_k * t_amb_k);
+
+        temp += (heat - cool_duct - cool_rad) * dt;
+        temp = std::clamp(temp, T_amb, 1250.0f);
+    }
+};
+
+inline float brake_fade_factor(float temp) {
+    if (temp < 350.0f) {
+        // Cold bite
+        return 0.85f + 0.15f * std::max((temp - 30.0f) / 320.0f, 0.0f);
+    }
+    if (temp <= 850.0f) {
+        return 1.0f; // Optimal operating window
+    }
+    if (temp <= 1050.0f) {
+        // Progressive fade
+        return 1.0f - 0.15f * ((temp - 850.0f) / 200.0f);
+    }
+    // Severe overheat fade
+    const float excess = std::min((temp - 1050.0f) / 150.0f, 1.0f);
+    return std::max(0.85f - 0.15f * excess, 0.70f);
+}
+
+inline RgbaColor incandescent_brake_color(float temp) {
+    // Returns glowing incandescent color for brake discs
+    if (temp < 400.0f) {
+        return {80, 95, 110, 220}; // Cold steel slate
+    }
+    if (temp < 600.0f) {
+        // Transition: slate to dull red
+        const float t = (temp - 400.0f) / 200.0f;
+        return {
+            static_cast<uint8_t>(80 + (170 - 80) * t),
+            static_cast<uint8_t>(95 + (45 - 95) * t),
+            static_cast<uint8_t>(110 + (25 - 110) * t),
+            230
+        };
+    }
+    if (temp < 850.0f) {
+        // Dull red to glowing orange
+        const float t = (temp - 600.0f) / 250.0f;
+        return {
+            static_cast<uint8_t>(170 + (255 - 170) * t),
+            static_cast<uint8_t>(45 + (130 - 45) * t),
+            static_cast<uint8_t>(25 + (20 - 25) * t),
+            245
+        };
+    }
+    if (temp < 1050.0f) {
+        // Glowing orange to incandescent yellow
+        const float t = (temp - 850.0f) / 200.0f;
+        return {
+            255,
+            static_cast<uint8_t>(130 + (210 - 130) * t),
+            static_cast<uint8_t>(20 + (50 - 20) * t),
+            255
+        };
+    }
+    // > 1050 °C: White-hot incandescent
+    const float t = std::clamp((temp - 1050.0f) / 150.0f, 0.0f, 1.0f);
+    return {
+        255,
+        static_cast<uint8_t>(210 + (250 - 210) * t),
+        static_cast<uint8_t>(50 + (210 - 50) * t),
+        255
+    };
+}
+
 struct CarThermalState {
     WheelThermal wheels[4];
+    BrakeDiscThermal brakes[4];
     uint64_t last_update_us = 0;
     bool initialized = false;
 
@@ -274,13 +378,10 @@ struct CarThermalState {
         for (int w = 0; w < 4; ++w) {
             wheels[w].surface = win.peak - 5.0f;
             wheels[w].carcass = win.peak - 5.0f;
+            brakes[w].temp = 480.0f;
         }
         initialized = true;
     }
-};
-
-struct RgbaColor {
-    uint8_t r = 0, g = 0, b = 0, a = 255;
 };
 
 inline RgbaColor thermochromic_color(float temp, Compound compound) {
@@ -320,12 +421,19 @@ struct PlayerTyreTelemetry {
     std::atomic<float> temps[4];
     std::atomic<float> surface_temps[4];
     std::atomic<float> carcass_temps[4];
+    std::atomic<float> brake_temps[4];
+    std::atomic<float> throttle{0.0f};
+    std::atomic<float> brake{0.0f};
+    std::atomic<float> g_lat{0.0f};
+    std::atomic<float> g_long{0.0f};
+    std::atomic<int> drs_state{0}; // 0 = Closed, 1 = Available, 2 = Open
 
     PlayerTyreTelemetry() {
         for (int i = 0; i < 4; ++i) {
             temps[i].store(85.0f, std::memory_order_relaxed);
             surface_temps[i].store(85.0f, std::memory_order_relaxed);
             carcass_temps[i].store(85.0f, std::memory_order_relaxed);
+            brake_temps[i].store(450.0f, std::memory_order_relaxed);
         }
     }
 };
@@ -333,6 +441,254 @@ struct PlayerTyreTelemetry {
 inline PlayerTyreTelemetry& player_tyre_telemetry() {
     static PlayerTyreTelemetry telem;
     return telem;
+}
+
+// ============================================================================
+// Drag Reduction System (DRS) & Dynamic Flap Controller
+// ============================================================================
+enum class DrsState : int {
+    Closed = 0,
+    Available = 1,
+    Open = 2
+};
+
+struct DrsController {
+    DrsState state = DrsState::Closed;
+    bool btn_latched = false;
+
+    void update(float dt, float speed_kmh, float throttle, float steer, float brake,
+                const WakeInfo& wake, bool btn_drs, bool auto_drs, bool enabled) {
+        if (!enabled) {
+            state = DrsState::Closed;
+            return;
+        }
+
+        const bool on_straight = (speed_kmh > 175.0f && throttle > 0.80f && std::fabs(steer) < 0.16f);
+        const bool trailing_rival = (wake.in_slipstream || wake.dist_ahead < 70.0f || wake.intensity > 0.02f);
+
+        static const bool drs_always = []{
+            const char* e = std::getenv("F1CE_DRS");
+            return e && std::strcmp(e, "always") == 0;
+        }();
+
+        const bool eligible = on_straight && (trailing_rival || drs_always);
+
+        if (state == DrsState::Open) {
+            // Cancel DRS if driver touches brakes, turns wheel, or lifts throttle
+            if (brake > 0.08f || std::fabs(steer) > 0.20f || throttle < 0.50f || speed_kmh < 155.0f) {
+                state = DrsState::Closed;
+            }
+        } else if (eligible) {
+            if (auto_drs || (btn_drs && !btn_latched)) {
+                state = DrsState::Open;
+            } else {
+                state = DrsState::Available;
+            }
+        } else {
+            state = DrsState::Closed;
+        }
+        btn_latched = btn_drs;
+    }
+};
+
+inline DrsController& global_drs_controller() {
+    static DrsController ctrl;
+    return ctrl;
+}
+
+inline DrsState current_drs_state() {
+    return (DrsState)player_tyre_telemetry().drs_state.load(std::memory_order_relaxed);
+}
+
+inline bool drs_enabled() {
+    static const bool enabled = []{
+        const char* e = std::getenv("F1CE_DRS");
+        if (e && std::strcmp(e, "0") == 0) return false;
+        return true;
+    }();
+    return enabled;
+}
+
+inline bool drs_auto_mode() {
+    static const bool autom = []{
+        const char* e = std::getenv("F1CE_DRS");
+        return e && std::strcmp(e, "auto") == 0;
+    }();
+    return autom;
+}
+
+// ============================================================================
+// Driver Pad Inputs (Brake, Throttle, Buttons)
+// ============================================================================
+struct PadInputs {
+    std::atomic<float> throttle{0.0f};
+    std::atomic<float> brake{0.0f};
+    std::atomic<bool> btn_triangle{false};
+};
+
+inline PadInputs& player_pad_inputs() {
+    static PadInputs inputs;
+    return inputs;
+}
+
+// ============================================================================
+// G-Force Vector Tracker & Filter
+// ============================================================================
+struct GForceTracker {
+    float g_lat = 0.0f;
+    float g_long = 0.0f;
+    float last_speed_mps = 0.0f;
+    Vec3 last_fwd{0.0f, 0.0f, 1.0f};
+
+    void update(float dt, float speed_mps, Vec3 fwd) {
+        if (dt < 0.0001f) return;
+        const float alpha = std::clamp(dt / 0.075f, 0.05f, 1.0f);
+
+        // Longitudinal G: delta velocity
+        const float a_long = (speed_mps - last_speed_mps) / dt / 9.80665f;
+        g_long += alpha * (a_long - g_long);
+        last_speed_mps = speed_mps;
+
+        const float len = std::sqrt(fwd.x * fwd.x + fwd.y * fwd.y + fwd.z * fwd.z);
+        if (len > 1e-4f) {
+            fwd.x /= len; fwd.y /= len; fwd.z /= len;
+            const float dot = std::clamp(fwd.x * last_fwd.x + fwd.y * last_fwd.y + fwd.z * last_fwd.z, -1.0f, 1.0f);
+            const float angle = std::acos(dot);
+            const float cross_y = fwd.z * last_fwd.x - fwd.x * last_fwd.z;
+            const float dir = cross_y > 0.0f ? 1.0f : -1.0f;
+            const float a_lat = dir * (angle / dt) * speed_mps / 9.80665f;
+            g_lat += alpha * (a_lat - g_lat);
+            last_fwd = fwd;
+        }
+    }
+};
+
+inline GForceTracker& player_gforce_tracker() {
+    static GForceTracker gf;
+    return gf;
+}
+
+// ============================================================================
+// Procedural Exhaust Acoustics & Engine Synthesizer
+// ============================================================================
+struct ProceduralAudio {
+    struct PopEvent {
+        float time_remaining = 0.0f;
+        float duration = 0.045f;
+        float intensity = 1.0f;
+        float freq = 140.0f;
+        float pan = 0.0f;
+    };
+    static constexpr int MAX_POPS = 16;
+    PopEvent pops[MAX_POPS]{};
+
+    float limiter_timer = 0.0f;
+    float drs_beep_time = 0.0f;
+    float prev_throttle = 0.0f;
+    int prev_gear = 1;
+    uint32_t rng_state = 123456789;
+
+    float randf() {
+        rng_state = rng_state * 1664525u + 1013904223u;
+        return (rng_state >> 16) / 65535.0f;
+    }
+
+    void trigger_pop(float intensity, float freq = 140.0f, float delay = 0.0f) {
+        for (auto& p : pops) {
+            if (p.time_remaining <= 0.0f) {
+                p.time_remaining = 0.045f + delay;
+                p.duration = 0.045f;
+                p.intensity = intensity;
+                p.freq = freq + (randf() - 0.5f) * 35.0f;
+                p.pan = (randf() - 0.5f) * 0.4f;
+                break;
+            }
+        }
+    }
+
+    void trigger_drs_beep() {
+        drs_beep_time = 0.14f;
+    }
+
+    void step_engine(float dt, float rpm, float throttle, int gear) {
+        // 1. Overrun exhaust crackles
+        if (prev_throttle > 0.55f && throttle < 0.12f && rpm > 12500.0f) {
+            const int count = 3 + (int)(randf() * 4.0f);
+            for (int i = 0; i < count; ++i) {
+                trigger_pop(0.35f + randf() * 0.45f, 130.0f + randf() * 60.0f, i * (0.038f + randf() * 0.025f));
+            }
+        }
+        // 2. Downshift bark
+        if (gear < prev_gear && gear > 0 && rpm > 11000.0f) {
+            trigger_pop(0.85f, 115.0f, 0.01f);
+            trigger_pop(0.55f, 165.0f, 0.045f);
+        }
+        // 3. Spark-cut rev limiter stutter (RPM > 18500)
+        if (rpm > 18500.0f && throttle > 0.70f) {
+            limiter_timer += dt;
+            if (limiter_timer >= 0.022f) {
+                limiter_timer = 0.0f;
+                trigger_pop(0.70f + randf() * 0.25f, 150.0f + randf() * 50.0f, 0.0f);
+            }
+        } else {
+            limiter_timer = 0.0f;
+        }
+
+        prev_throttle = throttle;
+        prev_gear = gear;
+    }
+
+    void render_mix(float* buffer, size_t frames, float sample_rate = 48000.0f) {
+        const float dt = 1.0f / sample_rate;
+        for (size_t i = 0; i < frames; ++i) {
+            float sample_l = 0.0f, sample_r = 0.0f;
+
+            for (auto& p : pops) {
+                if (p.time_remaining > 0.0f) {
+                    p.time_remaining -= dt;
+                    if (p.time_remaining < p.duration) {
+                        const float t = p.duration - p.time_remaining;
+                        const float punch = std::sin(2.0f * 3.14159265f * p.freq * t) * std::exp(-70.0f * t);
+                        const float crackle = (randf() * 2.0f - 1.0f) * std::exp(-120.0f * t);
+                        const float val = std::clamp((punch * 0.75f + crackle * 0.45f) * p.intensity, -1.0f, 1.0f);
+                        const float gain_l = 0.5f * (1.0f - p.pan);
+                        const float gain_r = 0.5f * (1.0f + p.pan);
+                        sample_l += val * gain_l * 0.40f;
+                        sample_r += val * gain_r * 0.40f;
+                    }
+                }
+            }
+
+            if (drs_beep_time > 0.0f) {
+                drs_beep_time -= dt;
+                const float t = 0.14f - drs_beep_time;
+                const bool pulse = (t < 0.045f) || (t > 0.07f && t < 0.115f);
+                if (pulse) {
+                    const float s = std::sin(2.0f * 3.14159265f * 1250.0f * t) * 0.15f;
+                    sample_l += s;
+                    sample_r += s;
+                }
+            }
+
+            buffer[i * 2] += sample_l;
+            buffer[i * 2 + 1] += sample_r;
+        }
+    }
+};
+
+inline ProceduralAudio& global_audio_synth() {
+    static ProceduralAudio synth;
+    return synth;
+}
+
+inline void render_audio_effects(float* mix_buffer, size_t frames) {
+    static const bool enabled = []{
+        const char* e = std::getenv("F1CE_EXHAUST_POP");
+        return !e || std::strcmp(e, "0") != 0;
+    }();
+    if (enabled) {
+        global_audio_synth().render_mix(mix_buffer, frames);
+    }
 }
 
 bool physics_eligible(unsigned car);
@@ -410,15 +766,6 @@ inline TrailBrakeEffect trail_brake_grip(float speed_kmh, float pad_steer,
 // ============================================================================
 // Aerodynamics: Dirty Air & Slipstream Model
 // ============================================================================
-struct Vec3 { float x = 0.0f, y = 0.0f, z = 0.0f; };
-
-struct WakeInfo {
-    float dist_ahead = 999.0f;
-    float lateral_offset = 0.0f;
-    float intensity = 0.0f;
-    bool in_slipstream = false;
-};
-
 inline WakeInfo evaluate_wake(Vec3 pos, Vec3 fwd, const Vec3* others, size_t count, float speed_kmh, float steer_abs) {
     WakeInfo best;
     const float fwd_len = std::sqrt(fwd.x * fwd.x + fwd.y * fwd.y + fwd.z * fwd.z);

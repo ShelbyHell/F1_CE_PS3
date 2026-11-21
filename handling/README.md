@@ -79,10 +79,44 @@ Enable **Tyre HUD widget** in the launcher or set `F1CE_TYRE_HUD=1`. A compact o
 - F1 chassis silhouette with four individual tyre pods (FL, FR, RL, RR) displaying live temperature in °C, wear life %, and grooved/slick pattern.
 - **Thermochromic Broadcast Palette:** Smoothly transitions tyre pod colors reflecting thermodynamic status:
   - Deep cold blue / cyan (<80 °C) $\to$ authentic Siemens green (85–105 °C optimal) $\to$ amber (105–115 °C hot) $\to$ warning red (>120 °C severe overheat).
+- **Carbon-Carbon Brake Disc Temperatures & Glow:** Displays live disc temperatures in °C with incandescent thermal radiation coloring:
+  - Cold slate (<400 °C) $\to$ dull red (400–600 °C) $\to$ glowing orange (600–850 °C) $\to$ bright incandescent yellow (850–1050 °C) $\to$ white-hot (>1050 °C), complete with vertical disc thermal glow bars.
+- **Pedal Input Traces:** Live vertical Throttle (green) and Brake (red) input pressure meters on the left column.
+- **Circular FOM G-Force Dial:** Concentric G-force meter with 2D lateral/longitudinal acceleration vector pip and live total G readout.
+- **DRS Status Badge:** Real-time indicator in the header bar showing `DRS` (closed), `DRS AVAIL` (yellow, eligible on straight), or `DRS OPEN` (cyan, active).
 - Integrated wear life percentage and miniature progress bar at the base of each tyre pod.
 - White and electric cyan pulsing borders when wheelspin or lockup slip occurs.
-- Telemetry footer with aerodynamic wake status (`CLEAN AIR`, `TURBULENCE`, `SLIPSTREAM`) and brake bias setting (`BIAS 56%`).
+- Telemetry footer with aerodynamic wake status (`CLEAN AIR`, `TURBULENCE`, `SLIPSTREAM`) and brake bias setting (`BRAKE BIAS 56%`).
 - Positioned seamlessly above the game's native rev counter without overlapping or gamepad/wheel input interference.
+
+### Carbon Brake Disc Thermodynamics & Fade
+
+Formula 1 Carbon-Carbon brake discs operate in a demanding thermal envelope between 300 °C and 1200 °C:
+- **Thermal Generation & Dissipation:** Disc heat is generated dynamically from speed, brake demand, axle load, and brake bias. Discs cool via forced duct convection proportional to vehicle speed and high-temperature Stefan-Boltzmann radiation.
+- **Thermal Fade Curve:**
+  - Cold bite reduction (<350 °C): discs require warming up for peak bite.
+  - Optimal friction window (350–850 °C): 100% full braking efficiency.
+  - Thermal fade (850–1050 °C): progressive bite loss under extended heavy braking.
+  - Severe overheat fade (>1050 °C): up to 30% reduction in braking grip, demanding careful brake management.
+- **Carcass Heat Soaking:** Sustained high brake disc temperatures (>500 °C) radiate heat through the hub into the tyre carcass, elevating carcass pressures and temperatures.
+
+### Drag Reduction System (DRS)
+
+Modern active aerodynamics rear wing flap control:
+- **Detection & Eligibility:** Activates on straights at speeds >175 km/h, throttle >80%, and steering angle <0.16 rad when running within 1.0s / slipstream cone of a preceding car (or anytime if `F1CE_DRS=always`).
+- **Activation Modes:**
+  - Manual (default): Press the controller Triangle button or steering wheel top button to open the wing.
+  - Automatic (`F1CE_DRS=auto`): Wing opens automatically when entering eligible zones on straights.
+- **Aerodynamic Effect:** Reduces high-speed drag, granting +18–22 km/h top-end boost and raising the vehicle speed ceiling from 280 km/h up to 345 km/h.
+- **Safety Auto-Cancellation:** The wing closes instantly if the driver applies brakes (>8%), turns the wheel into a corner, or lifts off throttle.
+- **Acoustic Feedback:** Double beep DRS activation chime synthesized at 48 kHz.
+
+### Procedural Exhaust Acoustics & Rev Limiter
+
+Real-time audio synthesis layered into the game's 48 kHz stereo audio stream (`F1CE_EXHAUST_POP=1`):
+- **Overrun Crackles & Pops:** Procedurally generated exhaust pops and unburnt fuel detonations when rapidly lifting off throttle at high RPM (>12,500 RPM).
+- **Downshift Barks:** Sharp throttle-blip exhaust detonation crackles on aggressive downshifts under braking.
+- **Spark-Cut Rev Limiter:** Rhythmic cylinder ignition cut stutter and pops when bouncing against the 18,500–19,000 RPM ceiling.
 
 ### Dry compounds
 
@@ -100,7 +134,7 @@ The grip curve uses each wheel's own wear value and saturates at `0.65` internal
 
 Enable **Physics telemetry (CSV)** or set `F1CE_TELEMETRY=1` (or legacy `F1CE_SLICK_TELEMETRY=1`) before launching a script. The game writes `slick_telemetry.csv` in its working directory (`handling` for the scripts) at approximately 10 Hz while the player drives. Stock physics can log too. Each run with driving samples overwrites the previous CSV; rename it before comparing runs.
 
-The CSV includes speed in km/h, pad steering command (not road-wheel angle), throttle, gear, contact and wheel slip, wheel load, internal wear, wheel temperatures (`temp_0`..`temp_3` in °C), raw tyre flags, the current wear mode, physics eligibility, and whether the player is driving. Career dry sessions use base tyre flags `0x19` and wear mode `1`; Quick Race uses wear mode `2`. The transient `0x3000` status bits are ignored. It also samples the player car during hand-offs, such as pit-lane control; `player_driving` distinguishes those rows. Wheel indices 0–1 are front; 2–3 are rear.
+The CSV includes speed in km/h, pad steering command (not road-wheel angle), throttle, brake input, gear, contact and wheel slip, wheel load, internal wear, tyre temperatures (`temp_0`..`temp_3`), brake disc temperatures (`btemp_0`..`btemp_3` in °C), lateral and longitudinal G-forces (`g_lat`, `g_long`), DRS state (`drs`: 0=closed, 1=available, 2=open), raw tyre flags, the current wear mode, physics eligibility, and whether the player is driving. Career dry sessions use base tyre flags `0x19` and wear mode `1`; Quick Race uses wear mode `2`. The transient `0x3000` status bits are ignored. It also samples the player car during hand-offs, such as pit-lane control; `player_driving` distinguishes those rows. Wheel indices 0–1 are front; 2–3 are rear.
 
 To compare Stock and 2026, keep the car, track, assists, fuel load and weather the same. Mark the same corner and start/finish line crossings on each CSV's elapsed-time scale. For example, from the repository root:
 

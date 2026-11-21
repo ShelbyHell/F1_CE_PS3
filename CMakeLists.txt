@@ -256,4 +256,7 @@ endif()
 add_executable(check_tuning handling/tools/check_tuning.cpp)
 set_target_properties(check_tuning PROPERTIES COMPILE_OPTIONS "" LINK_OPTIONS "")
 target_include_directories(check_tuning PRIVATE runtime)
+if(WIN32)
+  target_link_options(check_tuning PRIVATE -static)
+endif()
 

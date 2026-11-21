@@ -281,8 +281,15 @@ std::vector<Option> make_options() {
                               {{"56% (Balanced)", nullptr}, {"58% (Front / Stable)", "58"}, {"54% (Rear / Agile)", "54"}}, 0,
                               "Brake balance between front and rear axles. Affects trail braking rotation into corners."),
                        "F1CE_HANDLING", nullptr));
+    v.push_back(greyed(choice(QUICK_RACE, "Drag Reduction System (DRS)", "F1CE_DRS",
+                              {{"Manual (Triangle)", nullptr}, {"Automatic", "auto"}, {"Always Enabled", "always"}, {"Disabled", "0"}}, 0,
+                              "Drag reduction on straights when within 1.0s of car ahead (>175 km/h). Auto-cancels on braking. Triangle button or auto."),
+                       "F1CE_HANDLING", nullptr));
+    v.push_back(choice(QUICK_RACE, "Exhaust pops & rev limiter", "F1CE_EXHAUST_POP",
+                       {{"On (procedural audio)", nullptr}, {"Off", "0"}}, 0,
+                       "Procedural exhaust overrun pops, downshift barks, spark-cut rev limiter stutter, and DRS audio cue at 48 kHz."));
     v.push_back(toggle(QUICK_RACE, "Tyre HUD widget", "F1CE_TYRE_HUD",
-                       "In-game on-screen display showing individual tyre wear %, live temperatures in °C with thermochromic color transitions, compound, slip indicator, and aerodynamic wake status."));
+                       "In-game on-screen display showing individual tyre wear %, live temperatures in °C with thermochromic color transitions, carbon brake temperatures & fade, G-force meter, pedal inputs, compound, slip, and DRS status."));
     v.push_back(toggle(QUICK_RACE, "Physics telemetry (CSV)", "F1CE_TELEMETRY",
                        "Records player inputs, speed, wheelspin and wear at 10 Hz in slick_telemetry.csv. Works in Stock too."));
 
