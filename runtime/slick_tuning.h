@@ -473,21 +473,17 @@ struct DrsController {
     DrsState state = DrsState::Closed;
     bool btn_latched = false;
     bool armed = false;
-    float corner_time = 0.0f;
-    float straight_time = 0.0f;
-    float straight_dist = 0.0f;
-    float cooldown_time = 0.0f;
+    bool on_straight = false;
+    bool just_braked = false;
 
     void update(float dt, float speed_kmh, float throttle, float steer, float brake,
                 const WakeInfo& wake, bool btn_drs, bool auto_drs, bool enabled, bool is_time_trial = false) {
         if (!enabled) {
             state = DrsState::Closed;
             armed = false;
+            on_straight = false;
+            just_braked = false;
             return;
-        }
-
-        if (cooldown_time > 0.0f) {
-            cooldown_time -= dt;
         }
 
         static const bool drs_always = []{
@@ -498,64 +494,76 @@ struct DrsController {
         const bool trailing_rival = (wake.in_slipstream || wake.dist_ahead < 70.0f || wake.intensity > 0.02f);
         const bool eligible_at_detect = (is_time_trial || trailing_rival || drs_always);
 
-        const bool is_cornering = (std::fabs(steer) > 0.18f);
-        const bool is_straight = (std::fabs(steer) < 0.14f && throttle > 0.70f);
+        // Core vehicle dynamics states
+        const bool braking = (brake > 0.08f);
+        const bool heavy_turn = (std::fabs(steer) > 0.28f);
+        const bool straight_steer = (std::fabs(steer) < 0.22f);
 
-        if (is_cornering) {
-            corner_time += dt;
-            straight_time = 0.0f;
-            straight_dist = 0.0f;
-        } else if (is_straight) {
-            straight_time += dt;
-            straight_dist += (speed_kmh / 3.6f) * dt;
+        // 1. Braking Zone at end of straight: immediate cancellation and disarm
+        if (braking) {
+            state = DrsState::Closed;
+            armed = false;
+            on_straight = false;
+            just_braked = true;
+            btn_latched = btn_drs;
+            return;
         }
 
-        // 1. Detection Point: Triggered upon unwinding steering at corner exit onto a straight.
-        // Requires prior cornering (>0.5s) to guarantee a real turn before the straight,
-        // or session start high-speed rollout, with cooldown elapsed.
-        const bool corner_exit_trigger = (corner_time > 0.50f && !is_cornering && throttle > 0.60f);
-        const bool flying_start_trigger = (!armed && speed_kmh > 170.0f && straight_dist > 45.0f);
+        // When in a heavy turn or slowing down, reset the brake flag and keep DRS closed
+        if (heavy_turn || speed_kmh < 135.0f) {
+            just_braked = false;
+            state = DrsState::Closed;
+            armed = false;
+            on_straight = false;
+            btn_latched = btn_drs;
+            return;
+        }
 
-        if ((corner_exit_trigger || flying_start_trigger) && cooldown_time <= 0.0f && !armed && state == DrsState::Closed) {
-            corner_time = 0.0f;
+        // 2. Detection Point: Approaching / accelerating out of corner onto straight
+        // Released brakes, applying power, steering unwinding, speed building (>115 km/h)
+        if (!armed && !on_straight && !just_braked && throttle > 0.50f && straight_steer && speed_kmh >= 115.0f) {
             if (eligible_at_detect) {
                 armed = true;
                 state = DrsState::Armed;
             }
         }
 
-        // 2. Straight DRS Activation Zone: Car accelerates down the straight
-        const bool in_activation_zone = (straight_time > 0.50f && straight_dist > 45.0f && speed_kmh > 175.0f && std::fabs(steer) < 0.16f && throttle > 0.75f);
+        // Flying lap / grid start rollout fallback: already at high speed on straight
+        if (!armed && !on_straight && speed_kmh >= 170.0f && straight_steer && throttle > 0.65f) {
+            if (eligible_at_detect) {
+                armed = true;
+            }
+        }
+
+        // 3. Straight DRS Zone: High speed acceleration along the straight
+        on_straight = (speed_kmh >= 170.0f && throttle > 0.65f && straight_steer);
 
         if (state == DrsState::Open) {
-            // End of straight / braking zone: Instant cancellation & disarm until next corner detection
-            if (brake > 0.08f || std::fabs(steer) > 0.22f || throttle < 0.40f || speed_kmh < 150.0f) {
+            // Stay open while accelerating down the straight
+            if (speed_kmh < 155.0f || throttle < 0.35f || heavy_turn) {
                 state = DrsState::Closed;
                 armed = false;
-                cooldown_time = 3.5f;
+                on_straight = false;
             }
-        } else if (in_activation_zone && armed) {
-            // Reached DRS zone on straight with valid authorization
+        } else if (on_straight && armed) {
+            // Reached DRS zone on the straight with valid authorization
             if (auto_drs || (btn_drs && !btn_latched)) {
                 state = DrsState::Open;
             } else {
                 state = DrsState::Available;
             }
-        } else if (state == DrsState::Armed) {
-            // Remains Armed while transitioning from corner exit to the activation line
-            if (brake > 0.08f || std::fabs(steer) > 0.25f) {
-                state = DrsState::Closed;
-                armed = false;
-                cooldown_time = 2.0f;
-            }
         } else if (state == DrsState::Available) {
-            // In DRS zone on straight, waiting for manual button press
-            if (brake > 0.08f || std::fabs(steer) > 0.22f || throttle < 0.40f || speed_kmh < 150.0f) {
+            if (btn_drs && !btn_latched) {
+                state = DrsState::Open;
+            } else if (!on_straight) {
                 state = DrsState::Closed;
                 armed = false;
-                cooldown_time = 3.5f;
-            } else if (btn_drs && !btn_latched) {
-                state = DrsState::Open;
+            }
+        } else if (state == DrsState::Armed) {
+            // Waiting to reach the 170 km/h straight threshold
+            if (heavy_turn || throttle < 0.25f) {
+                state = DrsState::Closed;
+                armed = false;
             }
         } else {
             state = DrsState::Closed;
