@@ -252,57 +252,61 @@ int main() {
     trailing_wake.dist_ahead = 25.0f;
     trailing_wake.intensity = 0.5f;
 
-    // 1. Below speed threshold (< 175 km/h) -> DRS closed
-    drs.update(dt, 160.0f, 1.0f, 0.0f, 0.0f, trailing_wake, false, false, true);
+    // 1. In a corner, DRS is firmly Closed
+    for (int i = 0; i < 40; ++i) drs.update(0.016f, 130.0f, 0.5f, 0.35f, 0.0f, trailing_wake, false, false, true, false);
     TEST_CHECK(drs.state == slick::DrsState::Closed);
 
-    // 2. High speed (> 175 km/h) trailing rival on straight -> DRS Available
-    drs.update(dt, 230.0f, 1.0f, 0.0f, 0.0f, trailing_wake, false, false, true);
+    // 2. Corner exit onto straight: Detection Point triggers and Arms DRS when trailing rival
+    drs.update(0.016f, 150.0f, 0.85f, 0.02f, 0.0f, trailing_wake, false, false, true, false);
+    TEST_CHECK(drs.state == slick::DrsState::Armed);
+
+    // 3. Accelerating down straight across activation line: DRS becomes Available
+    for (int i = 0; i < 50; ++i) drs.update(0.016f, 210.0f, 1.0f, 0.0f, 0.0f, trailing_wake, false, false, true, false);
     TEST_CHECK(drs.state == slick::DrsState::Available);
 
-    // 3. Driver presses DRS button -> DRS Opens
-    drs.update(dt, 235.0f, 1.0f, 0.0f, 0.0f, trailing_wake, true, false, true);
+    // 4. Driver presses DRS button -> DRS Opens
+    drs.update(0.016f, 235.0f, 1.0f, 0.0f, 0.0f, trailing_wake, true, false, true, false);
     TEST_CHECK(drs.state == slick::DrsState::Open);
 
-    // 4. Stays open while holding throttle on straight
-    drs.update(dt, 250.0f, 1.0f, 0.0f, 0.0f, trailing_wake, false, false, true);
+    // 5. Stays open while holding throttle on straight
+    drs.update(0.016f, 260.0f, 1.0f, 0.0f, 0.0f, trailing_wake, false, false, true, false);
     TEST_CHECK(drs.state == slick::DrsState::Open);
 
-    // 5. Driver taps brake -> Instant cancellation to Closed
-    drs.update(dt, 245.0f, 0.0f, 0.0f, 0.35f, trailing_wake, false, false, true);
+    // 6. Driver taps brake -> Instant cancellation to Closed & Disarmed
+    drs.update(0.016f, 245.0f, 0.0f, 0.0f, 0.35f, trailing_wake, false, false, true, false);
     TEST_CHECK(drs.state == slick::DrsState::Closed);
 
-    // 6. Automatic mode opens immediately without button press
-    drs.update(dt, 230.0f, 1.0f, 0.0f, 0.0f, trailing_wake, false, true, true);
-    TEST_CHECK(drs.state == slick::DrsState::Open);
-
-    // 7. Steering sharply into corner -> DRS cancels
-    drs.update(dt, 220.0f, 1.0f, 0.45f, 0.0f, trailing_wake, false, true, true);
+    // 7. Mid-corner acceleration -> Stays Closed (cannot re-open mid-corner)
+    drs.update(0.016f, 140.0f, 1.0f, 0.45f, 0.0f, trailing_wake, true, true, true, false);
     TEST_CHECK(drs.state == slick::DrsState::Closed);
 
-    // 8. Time Trial Mode: DRS is constantly enabled/active without requiring a rival car ahead
+    // 8. Time Trial Mode: Detection point arms without requiring a rival car ahead
     slick::DrsController tt_drs;
     slick::WakeInfo empty_wake{}; // No rival cars
 
-    // 8a. Standstill in pit lane -> Available
-    tt_drs.update(dt, 0.0f, 0.0f, 0.0f, 0.0f, empty_wake, false, false, true, true);
-    TEST_CHECK(tt_drs.state == slick::DrsState::Available);
-
-    // 8b. Accelerating onto track -> Automatically Opens
-    tt_drs.update(dt, 55.0f, 1.0f, 0.0f, 0.0f, empty_wake, false, false, true, true);
-    TEST_CHECK(tt_drs.state == slick::DrsState::Open);
-
-    // 8c. Flat out down straight -> Stays Open
-    tt_drs.update(dt, 290.0f, 1.0f, 0.0f, 0.0f, empty_wake, false, false, true, true);
-    TEST_CHECK(tt_drs.state == slick::DrsState::Open);
-
-    // 8d. Heavy braking into corner -> Closes for stability
-    tt_drs.update(dt, 260.0f, 0.0f, 0.0f, 0.75f, empty_wake, false, false, true, true);
+    // 8a. Standstill / pit exit -> Closed
+    tt_drs.update(0.016f, 30.0f, 0.5f, 0.0f, 0.0f, empty_wake, false, false, true, true);
     TEST_CHECK(tt_drs.state == slick::DrsState::Closed);
 
-    // 8e. Getting back on throttle on corner exit -> Automatically Re-opens
-    tt_drs.update(dt, 120.0f, 0.85f, 0.05f, 0.0f, empty_wake, false, false, true, true);
+    // 8b. Turning through corner before straight
+    for (int i = 0; i < 40; ++i) tt_drs.update(0.016f, 120.0f, 0.5f, 0.35f, 0.0f, empty_wake, false, false, true, true);
+    TEST_CHECK(tt_drs.state == slick::DrsState::Closed);
+
+    // 8c. Unwinding wheel at corner exit onto straight -> Detection Point Arms DRS!
+    tt_drs.update(0.016f, 145.0f, 0.90f, 0.02f, 0.0f, empty_wake, false, false, true, true);
+    TEST_CHECK(tt_drs.state == slick::DrsState::Armed);
+
+    // 8d. Accelerating along straight across activation line with auto_drs -> Opens automatically
+    for (int i = 0; i < 50; ++i) tt_drs.update(0.016f, 220.0f, 1.0f, 0.0f, 0.0f, empty_wake, false, true, true, true);
     TEST_CHECK(tt_drs.state == slick::DrsState::Open);
+
+    // 8e. Heavy braking into corner -> Closes & Disarms
+    tt_drs.update(0.016f, 250.0f, 0.0f, 0.0f, 0.80f, empty_wake, false, false, true, true);
+    TEST_CHECK(tt_drs.state == slick::DrsState::Closed);
+
+    // 8f. Mid-corner throttle -> Stays Closed
+    tt_drs.update(0.016f, 110.0f, 0.85f, 0.35f, 0.0f, empty_wake, false, true, true, true);
+    TEST_CHECK(tt_drs.state == slick::DrsState::Closed);
 
     // ========================================================================
     // G-Force Vector Tracker Checks

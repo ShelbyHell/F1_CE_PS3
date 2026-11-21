@@ -600,7 +600,7 @@ void draw_tyre_hud(ImDrawList* dl, float W, float H) {
     // DRS Status Badge in Header
     const auto& telem = slick::player_tyre_telemetry();
     const auto drs_mode = (slick::DrsState)telem.drs_state.load(std::memory_order_relaxed);
-    const float drs_w = 56.0f * S, drs_h = 15.0f * S;
+    const float drs_w = 60.0f * S, drs_h = 15.0f * S;
     const float drs_x = x1 - drs_w - 8.0f * S, drs_y = y0 + 3.5f * S;
 
     ImU32 drs_bg, drs_border, drs_txt_col;
@@ -615,6 +615,11 @@ void draw_tyre_hud(ImDrawList* dl, float W, float H) {
         drs_border = IM_COL32(255, 230, 50, 255);
         drs_txt_col = IM_COL32(15, 25, 20, 255);
         drs_str = "DRS AVAIL";
+    } else if (drs_mode == slick::DrsState::Armed) {
+        drs_bg = IM_COL32(210, 115, 15, 240);
+        drs_border = IM_COL32(255, 180, 40, 255);
+        drs_txt_col = IM_COL32(255, 255, 255, 255);
+        drs_str = "DRS ARMED";
     } else {
         drs_bg = IM_COL32(22, 28, 35, 180);
         drs_border = IM_COL32(45, 60, 72, 180);

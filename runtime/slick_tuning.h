@@ -465,18 +465,29 @@ inline bool is_time_trial_session() {
 enum class DrsState : int {
     Closed = 0,
     Available = 1,
-    Open = 2
+    Open = 2,
+    Armed = 3
 };
 
 struct DrsController {
     DrsState state = DrsState::Closed;
     bool btn_latched = false;
+    bool armed = false;
+    float corner_time = 0.0f;
+    float straight_time = 0.0f;
+    float straight_dist = 0.0f;
+    float cooldown_time = 0.0f;
 
     void update(float dt, float speed_kmh, float throttle, float steer, float brake,
                 const WakeInfo& wake, bool btn_drs, bool auto_drs, bool enabled, bool is_time_trial = false) {
         if (!enabled) {
             state = DrsState::Closed;
+            armed = false;
             return;
+        }
+
+        if (cooldown_time > 0.0f) {
+            cooldown_time -= dt;
         }
 
         static const bool drs_always = []{
@@ -484,40 +495,72 @@ struct DrsController {
             return e && std::strcmp(e, "always") == 0;
         }();
 
-        const bool time_trial_mode = is_time_trial || drs_always;
+        const bool trailing_rival = (wake.in_slipstream || wake.dist_ahead < 70.0f || wake.intensity > 0.02f);
+        const bool eligible_at_detect = (is_time_trial || trailing_rival || drs_always);
 
-        if (time_trial_mode) {
-            // In Time Trial mode, DRS is constantly enabled/active:
-            // It remains Open while driving/accelerating, temporarily closing only under braking.
-            if (brake > 0.08f) {
-                state = DrsState::Closed;
-            } else if (throttle > 0.15f || speed_kmh >= 35.0f || (btn_drs && !btn_latched) || (state == DrsState::Open && speed_kmh >= 20.0f)) {
-                state = DrsState::Open;
-            } else {
-                state = DrsState::Available;
-            }
-            btn_latched = btn_drs;
-            return;
+        const bool is_cornering = (std::fabs(steer) > 0.18f);
+        const bool is_straight = (std::fabs(steer) < 0.14f && throttle > 0.70f);
+
+        if (is_cornering) {
+            corner_time += dt;
+            straight_time = 0.0f;
+            straight_dist = 0.0f;
+        } else if (is_straight) {
+            straight_time += dt;
+            straight_dist += (speed_kmh / 3.6f) * dt;
         }
 
-        const bool on_straight = (speed_kmh > 175.0f && throttle > 0.80f && std::fabs(steer) < 0.16f);
-        const bool trailing_rival = (wake.in_slipstream || wake.dist_ahead < 70.0f || wake.intensity > 0.02f);
-        const bool eligible = on_straight && trailing_rival;
+        // 1. Detection Point: Triggered upon unwinding steering at corner exit onto a straight.
+        // Requires prior cornering (>0.5s) to guarantee a real turn before the straight,
+        // or session start high-speed rollout, with cooldown elapsed.
+        const bool corner_exit_trigger = (corner_time > 0.50f && !is_cornering && throttle > 0.60f);
+        const bool flying_start_trigger = (!armed && speed_kmh > 170.0f && straight_dist > 45.0f);
+
+        if ((corner_exit_trigger || flying_start_trigger) && cooldown_time <= 0.0f && !armed && state == DrsState::Closed) {
+            corner_time = 0.0f;
+            if (eligible_at_detect) {
+                armed = true;
+                state = DrsState::Armed;
+            }
+        }
+
+        // 2. Straight DRS Activation Zone: Car accelerates down the straight
+        const bool in_activation_zone = (straight_time > 0.50f && straight_dist > 45.0f && speed_kmh > 175.0f && std::fabs(steer) < 0.16f && throttle > 0.75f);
 
         if (state == DrsState::Open) {
-            // Cancel DRS if driver touches brakes, turns wheel, or lifts throttle
-            if (brake > 0.08f || std::fabs(steer) > 0.20f || throttle < 0.50f || speed_kmh < 155.0f) {
+            // End of straight / braking zone: Instant cancellation & disarm until next corner detection
+            if (brake > 0.08f || std::fabs(steer) > 0.22f || throttle < 0.40f || speed_kmh < 150.0f) {
                 state = DrsState::Closed;
+                armed = false;
+                cooldown_time = 3.5f;
             }
-        } else if (eligible) {
+        } else if (in_activation_zone && armed) {
+            // Reached DRS zone on straight with valid authorization
             if (auto_drs || (btn_drs && !btn_latched)) {
                 state = DrsState::Open;
             } else {
                 state = DrsState::Available;
             }
+        } else if (state == DrsState::Armed) {
+            // Remains Armed while transitioning from corner exit to the activation line
+            if (brake > 0.08f || std::fabs(steer) > 0.25f) {
+                state = DrsState::Closed;
+                armed = false;
+                cooldown_time = 2.0f;
+            }
+        } else if (state == DrsState::Available) {
+            // In DRS zone on straight, waiting for manual button press
+            if (brake > 0.08f || std::fabs(steer) > 0.22f || throttle < 0.40f || speed_kmh < 150.0f) {
+                state = DrsState::Closed;
+                armed = false;
+                cooldown_time = 3.5f;
+            } else if (btn_drs && !btn_latched) {
+                state = DrsState::Open;
+            }
         } else {
             state = DrsState::Closed;
         }
+
         btn_latched = btn_drs;
     }
 };

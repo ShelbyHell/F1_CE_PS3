@@ -229,8 +229,8 @@ void slick_grip_probe(PPUContext& c) {
                    btn_drs, slick::drs_auto_mode(), drs_active, is_time_trial);
         p_telem.drs_state.store((int)drs.state, std::memory_order_relaxed);
         static u64 last_drs_beep_us = 0;
-        if (drs.state != prev_drs && (drs.state == slick::DrsState::Available || drs.state == slick::DrsState::Open)) {
-            if (now - last_drs_beep_us > 3500000) {
+        if (drs.state != prev_drs && (drs.state == slick::DrsState::Armed || drs.state == slick::DrsState::Available || drs.state == slick::DrsState::Open)) {
+            if (now - last_drs_beep_us > 2000000) {
                 last_drs_beep_us = now;
                 slick::global_audio_synth().trigger_drs_beep();
             }
