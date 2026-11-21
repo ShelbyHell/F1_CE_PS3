@@ -135,13 +135,11 @@ float half_to_float(u16 h);
 struct BlockHeap {
     static constexpr u32 ALIGN = 256;
     u32 size = 0;
-    u32 buf = 0, tex = 0, ring_tex = 0;       // (OpenGL objects)
     u8* ptr = nullptr;                        // persistently mapped (index arena)
     std::map<u32, u32> free_off;              // offset -> size
     std::set<std::pair<u32, u32>> free_size;  // size, offset
     struct Pending { u64 frame; u32 off, size; };
     std::deque<Pending> pending;              // freed blocks waiting for their frame's fence
-    std::deque<std::pair<u64, void*>> fences;   // end-of-frame fences (OpenGL)
     u64 done_frame = 0;                       // the GPU finished every frame up to this one
     u32 used = 0, failed = 0;
 };

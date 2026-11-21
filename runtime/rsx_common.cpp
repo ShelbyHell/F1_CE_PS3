@@ -39,7 +39,7 @@ u32 g_prim = 0;
 std::vector<Range> g_array_ranges, g_index_ranges;
 std::vector<u32> g_inline;
 bool g_vtx_gpu = false;   // vertex pulling on (F1CE_VTX_CPU=1: CPU conversion into float4 attribute buffers)
-bool g_shader_vk = false;   // the translators emit Vulkan GLSL (see the end of rsx_common.h)
+bool g_shader_vk = true;   // Vulkan native GLSL translator
 
 // fingerprint of [ea, ea + bytes): 512 words sampled evenly
 u64 mem_fingerprint(u32 ea, u32 bytes) {

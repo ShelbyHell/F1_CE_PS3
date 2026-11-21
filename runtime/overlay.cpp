@@ -551,7 +551,13 @@ void draw_tyre_hud(ImDrawList* dl, float W, float H) {
     const float pad_right = 24.0f * S;
     // Positioned cleanly ABOVE the tachometer/speedometer cluster (top of rev dial is ~375 in 720p)
     const float pad_bottom = 365.0f * S;
-    const float x0 = W - box_w - pad_right, y0 = H - box_h - pad_bottom;
+    // On ultra-wide (21:9 / 32:9), the 2D dashboard stays within the central 16:9 safe area
+    float hud_x = 0.0f, hud_w = W;
+    if ((double)W / H > 16.0 / 9.0) {
+        hud_w = H * (16.0f / 9.0f);
+        hud_x = (W - hud_w) * 0.5f;
+    }
+    const float x0 = hud_x + hud_w - box_w - pad_right, y0 = H - box_h - pad_bottom;
     const float x1 = x0 + box_w, y1 = y0 + box_h;
 
     // Siemens 2006 F1 broadcast color scheme

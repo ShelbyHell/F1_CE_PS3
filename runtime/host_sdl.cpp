@@ -31,7 +31,6 @@ std::mutex g_win_mutex;
 std::condition_variable g_win_cv;
 SDL_Window* g_window = nullptr;
 bool g_window_failed = false;
-SDL_GLContext g_gl = nullptr;
 
 SDL_AudioStream* g_audio = nullptr;
 
@@ -135,10 +134,6 @@ void update_pad(SDL_Gamepad* gp) {
 
 void ui_thread() {
     set_thread_name("ui");
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     // F1CE_FULLSCREEN=1 starts in (desktop) full screen; F11 or Alt+Enter toggles it at any time
     const bool full = getenv("F1CE_FULLSCREEN") && atoi(getenv("F1CE_FULLSCREEN")) != 0;
     int win_w = 1280, win_h = 720;   // F1CE_WINDOW=<w>x<h>: initial window size
@@ -147,8 +142,7 @@ void ui_thread() {
         if (sscanf(e, "%dx%d", &a, &b) == 2 && a >= 320 && b >= 180) { win_w = a; win_h = b; }
     }
     SDL_Window* win = SDL_CreateWindow("Formula One: Championship Edition (recompiled)", win_w, win_h,
-                                       (rsx::use_vulkan() ? SDL_WINDOW_VULKAN : SDL_WINDOW_OPENGL) | SDL_WINDOW_RESIZABLE |
-                                           (full ? SDL_WINDOW_FULLSCREEN : 0));
+                                       SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | (full ? SDL_WINDOW_FULLSCREEN : 0));
     {
         std::lock_guard lk(g_win_mutex);
         g_window = win;
@@ -389,39 +383,10 @@ void present(u32 ea, u32 pitch, u32 width, u32 height) {
     if (dump_frame_due()) dump_frame(img.data(), width, height);
 }
 
-bool gl_begin() {
-    std::unique_lock lk(g_win_mutex);
-    g_win_cv.wait(lk, [] { return g_window || g_window_failed; });
-    if (!g_window) return false;
-    g_gl = SDL_GL_CreateContext(g_window);
-    if (!g_gl) { LOG_E("OpenGL 3.3 context creation failed: %s", SDL_GetError()); return false; }
-    SDL_GL_MakeCurrent(g_window, g_gl);
-    // F1CE_VSYNC: 1 = wait for the display's vblank (no tearing; the game still paces itself on the guest vblank),
-    // 0 = off, -1 = adaptive (late frames tear instead of waiting a whole refresh)
-    const char* vs = getenv("F1CE_VSYNC");
-    int interval = vs ? atoi(vs) : 1;
-    if (!SDL_GL_SetSwapInterval(interval)) {
-        LOG_W("swap interval %d: %s", interval, SDL_GetError());
-        if (interval < 0 && !SDL_GL_SetSwapInterval(1)) LOG_W("swap interval 1: %s", SDL_GetError());
-    }
-    int got = 0;
-    SDL_GL_GetSwapInterval(&got);
-    LOG_I("vsync: swap interval %d", got);
-    return true;
+void window_drawable_size(int* w, int* h) {
+    if (g_window) SDL_GetWindowSizeInPixels(g_window, w, h);
+    else if (w && h) { *w = *h = 0; }
 }
-void* gl_proc(const char* name) { return (void*)SDL_GL_GetProcAddress(name); }
-void* gl_create_shared_context(bool share) {
-    if (!g_window || !g_gl) return nullptr;
-    SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, share ? 1 : 0);
-    SDL_GLContext ctx = SDL_GL_CreateContext(g_window);   // becomes current: switch back
-    SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 0);
-    SDL_GL_MakeCurrent(g_window, g_gl);
-    if (!ctx) LOG_W("shared GL context: %s", SDL_GetError());
-    return ctx;
-}
-bool gl_make_current(void* ctx) { return SDL_GL_MakeCurrent(g_window, (SDL_GLContext)ctx); }
-void gl_swap() { if (g_window) SDL_GL_SwapWindow(g_window); }
-void gl_drawable_size(int* w, int* h) { SDL_GetWindowSizeInPixels(g_window, w, h); }
 
 void* vk_begin() {
     std::unique_lock lk(g_win_mutex);

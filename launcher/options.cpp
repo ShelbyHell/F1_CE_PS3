@@ -131,9 +131,8 @@ std::vector<Option> make_options() {
                        0,
                        "Sets anti-aliasing, shadows, reflections, textures, car detail, motion blur and heat haze at "
                        "once. Changing one of them makes it Custom (kept for the next time Custom is picked)."));
-    v.push_back(choice(VIDEO, "Renderer", "F1CE_RENDERER", {{"OpenGL", nullptr}, {"Vulkan", "vulkan"}}, 0,
-                       "Vulkan or OpenGL. Vulkan can pick any GPU; OpenGL runs on Windows' high-performance or "
-                       "power-saving GPU."));
+    v.push_back(choice(VIDEO, "Renderer", "F1CE_RENDERER", {{"Vulkan (Native)", nullptr}}, 0,
+                       "High-performance Vulkan graphics backend with parallel pipeline compilation and low latency."));
     v.push_back(choice(VIDEO, "GPU", "F1CE_GPU", {{"Automatic (high performance)", nullptr}}, 0,
                        "The graphics card the game runs on."));
     v.push_back(choice(VIDEO, "Internal resolution", "F1CE_SCALE",
@@ -142,7 +141,8 @@ std::vector<Option> make_options() {
                         {"904x565 (16:10)", "904x565"}, {"1280x720 (16:9, original)", nullptr},
                         {"1280x800 (16:10)", "1280x800"}, {"1440x900 (16:10)", "1440x900"},
                         {"1920x1080 (16:9)", "1.5"}, {"2560x1080 (21:9)", "2560x1080"}, {"2560x1440 (16:9)", "2"},
-                        {"3440x1440 (21:9)", "3440x1440"}, {"3840x2160 (16:9)", "3"}, {"5120x2880 (16:9)", "4"}},
+                        {"3440x1440 (21:9)", "3440x1440"}, {"3840x1080 (32:9)", "3840x1080"},
+                        {"3840x2160 (16:9)", "3"}, {"5120x1440 (32:9)", "5120x1440"}, {"5120x2880 (16:9)", "4"}},
                        5, "The resolution the game renders at. 1280x720 is the original."));
     v.push_back(header(VIDEO, "Detail"));
     v.push_back(choice(VIDEO, "Shadow maps", "F1CE_SHADOW_RES",
@@ -162,14 +162,16 @@ std::vector<Option> make_options() {
     v.push_back(greyed(choice(VIDEO, "Window size", "F1CE_WINDOW",
                        {{"1280x720", nullptr}, {"1600x900", "1600x900"}, {"1920x1080", "1920x1080"},
                         {"2560x1080 (21:9)", "2560x1080"}, {"2560x1440", "2560x1440"},
-                        {"3440x1440 (21:9)", "3440x1440"}, {"3840x2160", "3840x2160"}},
+                        {"3440x1440 (21:9)", "3440x1440"}, {"3840x1080 (32:9)", "3840x1080"},
+                        {"3840x2160", "3840x2160"}, {"5120x1440 (32:9)", "5120x1440"}},
                        0, "The window's size when not in full screen."), "F1CE_FULLSCREEN", "1"));
     v.push_back(toggle(VIDEO, "Stretch to fill", "F1CE_STRETCH",
                        "Stretch the picture to fill the window or the screen instead of keeping its aspect ratio "
                        "(black bars)."));
     v.push_back(header(VIDEO, "Frame rate"));
-    v.push_back(choice(VIDEO, "Vertical sync", "F1CE_VSYNC", {{"On", nullptr}, {"Off", "0"}, {"Adaptive", "-1"}}, 0,
-                       "On, Off or Adaptive (no wait when a frame is late)."));
+    v.push_back(choice(VIDEO, "Vertical sync", "F1CE_VSYNC",
+                       {{"On (FIFO)", nullptr}, {"Off (Immediate)", "0"}, {"Adaptive (Relaxed)", "-1"}, {"Fast / Low Latency (Mailbox)", "mailbox"}}, 0,
+                       "On (FIFO), Off, Adaptive Relaxed or Fast Mailbox (lowest input lag without tearing)."));
     {
         Option o = toggle(VIDEO, "Up to 60 fps", "F1CE_60FPS",
                           "Game speed unchanged. Known issues: flashing shadows, odd pit stop animations, broken "

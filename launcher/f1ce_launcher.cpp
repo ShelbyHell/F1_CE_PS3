@@ -63,7 +63,7 @@ struct Field {   // free text; empty leaves the variable unset
 };
 
 Combo g_combos[] = {
-    {L"Renderer", L"F1CE_RENDERER", {{L"OpenGL", nullptr}, {L"Vulkan", L"vulkan"}}, 0, VIDEO},
+    {L"Renderer", L"F1CE_RENDERER", {{L"Vulkan (Native)", nullptr}}, 0, VIDEO},
     // the GPUs found at start (add_gpus)
     {L"GPU", L"F1CE_GPU", {{L"Automatic (high performance)", nullptr}}, 0, VIDEO},
     {L"Internal resolution", L"F1CE_SCALE",
@@ -71,11 +71,13 @@ Combo g_combos[] = {
       {L"720x576 (4:3, PS3 576p)", L"576p:4x3"}, {L"720x576 (16:9, PS3 576p)", L"576p"}, {L"904x565 (16:10)", L"904x565"},
       {L"1280x720 (16:9, original)", nullptr}, {L"1280x800 (16:10)", L"1280x800"}, {L"1440x900 (16:10)", L"1440x900"},
       {L"1920x1080 (16:9)", L"1.5"}, {L"2560x1080 (21:9)", L"2560x1080"}, {L"2560x1440 (16:9)", L"2"},
-      {L"3440x1440 (21:9)", L"3440x1440"}, {L"3840x2160 (16:9)", L"3"}, {L"5120x2880 (16:9)", L"4"}}, 5, VIDEO},
+      {L"3440x1440 (21:9)", L"3440x1440"}, {L"3840x1080 (32:9)", L"3840x1080"}, {L"3840x2160 (16:9)", L"3"},
+      {L"5120x1440 (32:9)", L"5120x1440"}, {L"5120x2880 (16:9)", L"4"}}, 5, VIDEO},
     {L"Window size", L"F1CE_WINDOW",
      {{L"1280x720", nullptr}, {L"1600x900", L"1600x900"}, {L"1920x1080", L"1920x1080"}, {L"2560x1080 (21:9)", L"2560x1080"},
-      {L"2560x1440", L"2560x1440"}, {L"3440x1440 (21:9)", L"3440x1440"}, {L"3840x2160", L"3840x2160"}}, 0, DISPLAY},
-    {L"Vertical sync", L"F1CE_VSYNC", {{L"On", nullptr}, {L"Off", L"0"}, {L"Adaptive", L"-1"}}, 0, FRAMERATE},
+      {L"2560x1440", L"2560x1440"}, {L"3440x1440 (21:9)", L"3440x1440"}, {L"3840x1080 (32:9)", L"3840x1080"},
+      {L"3840x2160", L"3840x2160"}, {L"5120x1440 (32:9)", L"5120x1440"}}, 0, DISPLAY},
+    {L"Vertical sync", L"F1CE_VSYNC", {{L"On (FIFO)", nullptr}, {L"Off", L"0"}, {L"Adaptive", L"-1"}, {L"Fast (Mailbox)", L"mailbox"}}, 0, FRAMERATE},
     // launcher only (not passed to the game): sets the options of PRESET_ENVS (g_presets); "Custom" keeps the
     // player's own values, saved in the ini's [custom preset] section
     {L"Preset", L"preset",

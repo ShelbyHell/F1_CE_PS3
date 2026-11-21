@@ -1,4 +1,4 @@
-// Picks the renderer: OpenGL unless F1CE_RENDERER=vulkan (or vk). Decided once at start-up, like the window type.
+// Picks the renderer: Vulkan native backend for RSX FIFO.
 #include "rsx.h"
 #include "kernel.h"
 
@@ -38,39 +38,22 @@ void report_written() {
     g_report_oldest.store(s_report_frames.empty() ? ~0ull : s_report_frames.front(), std::memory_order_release);
 }
 
-namespace gl { void init(); void method(u32, u32); void flip(u32, u32, u32, u32); bool report(u32, u32); std::string mem_report(); void zpass_service(); }
-#ifdef F1CE_VULKAN
-namespace vk { void init(); void method(u32, u32); void flip(u32, u32, u32, u32); bool report(u32, u32); std::string mem_report(); void zpass_service(); }
-
-bool use_vulkan() {
-    static const bool v = [] {
-        const char* e = getenv("F1CE_RENDERER");
-        return e && (!strcmp(e, "vulkan") || !strcmp(e, "vk"));
-    }();
-    return v;
+namespace vk {
+void init();
+void method(u32, u32);
+void flip(u32, u32, u32, u32);
+bool report(u32, u32);
+std::string mem_report();
+void zpass_service();
 }
 
-void init() { if (use_vulkan()) vk::init(); else gl::init(); }
-void method(u32 m, u32 arg) { if (use_vulkan()) vk::method(m, arg); else gl::method(m, arg); }
-void flip(u32 ea, u32 pitch, u32 w, u32 h) { if (use_vulkan()) vk::flip(ea, pitch, w, h); else gl::flip(ea, pitch, w, h); }
-bool report(u32 type, u32 ea) { return use_vulkan() ? vk::report(type, ea) : gl::report(type, ea); }
-std::string mem_report() { return use_vulkan() ? vk::mem_report() : gl::mem_report(); }
-void zpass_service() { if (use_vulkan()) vk::zpass_service(); else gl::zpass_service(); }
-#else
-bool use_vulkan() {
-    static const bool asked = [] {
-        const char* e = getenv("F1CE_RENDERER");
-        return e && (!strcmp(e, "vulkan") || !strcmp(e, "vk"));
-    }();
-    if (asked) { static bool once = (LOG_W("F1CE_RENDERER=vulkan: built without F1CE_VULKAN, using OpenGL"), true); (void)once; }
-    return false;
-}
+bool use_vulkan() { return true; }
 
-void init() { use_vulkan(); gl::init(); }
-void method(u32 m, u32 arg) { gl::method(m, arg); }
-void flip(u32 ea, u32 pitch, u32 w, u32 h) { gl::flip(ea, pitch, w, h); }
-bool report(u32 type, u32 ea) { return gl::report(type, ea); }
-std::string mem_report() { return gl::mem_report(); }
-void zpass_service() { gl::zpass_service(); }
-#endif
+void init() { vk::init(); }
+void method(u32 m, u32 arg) { vk::method(m, arg); }
+void flip(u32 ea, u32 pitch, u32 w, u32 h) { vk::flip(ea, pitch, w, h); }
+bool report(u32 type, u32 ea) { return vk::report(type, ea); }
+std::string mem_report() { return vk::mem_report(); }
+void zpass_service() { vk::zpass_service(); }
+
 }  // namespace rsx

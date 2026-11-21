@@ -29,7 +29,7 @@ executable reads your own `PS3_GAME` folder at runtime.
 | `runtime/spu_pm.cpp` | the job manager policy module's hot functions rewritten in C++ (buffer lists, DMA info, buffer release, job end, job queue, interrupt entry) |
 | `runtime/hle_frontend.cpp` | front-end additions as Lua source run in the game's own Lua state ("QUIT GAME" button), native Lua error unwinding |
 | `runtime/hle_gcm.cpp` | RSX FIFO front end (jumps/calls, semaphores, labels, reports, flips) |
-| `runtime/rsx_gl.cpp` | OpenGL 3.3 renderer: RSX vertex/fragment programs → GLSL, textures, blending |
+| `runtime/rsx_vk.cpp` | Native Vulkan renderer: RSX vertex/fragment programs → SPIR-V, low-latency presentation |
 | `runtime/host_sdl.cpp` | SDL3 window, keyboard/gamepad input, audio output |
 | `runtime/host_null.cpp`, `rsx_null.cpp` | headless backend (`-DF1CE_HOST=NULL`) |
 | `cmake/` | toolchains: Windows (llvm-mingw), Linux cross (zig, with `pkg-config.cmd` for the sysroot) |

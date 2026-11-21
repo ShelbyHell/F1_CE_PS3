@@ -28,10 +28,10 @@ const Format& format() {
             f.lines = atoi(e) == 576 ? 2 : 1;
             f.narrow = strstr(e, ":4x3") != nullptr;
         } else if (sscanf(e, "%dx%d", &a, &b) == 2 && a > 0 && b > 0) {
-            f.x = std::clamp(a / 1280.0f, 0.5f, 4.0f);
-            f.y = std::clamp(b / 720.0f, 0.5f, 4.0f);
+            f.x = std::clamp(a / 1280.0f, 0.5f, 8.0f);
+            f.y = std::clamp(b / 720.0f, 0.5f, 8.0f);
         } else {
-            f.x = f.y = std::clamp((float)atof(e), 1.0f, 4.0f);
+            f.x = f.y = std::clamp((float)atof(e), 1.0f, 8.0f);
         }
         return f;
     }();

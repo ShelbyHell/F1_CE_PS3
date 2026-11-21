@@ -2078,7 +2078,7 @@ bool create_swapchain() {
     VkExtent2D ext = caps.currentExtent;
     if (ext.width == ~0u) {
         int w = 1280, h = 720;
-        host::gl_drawable_size(&w, &h);
+        host::window_drawable_size(&w, &h);
         ext = {(u32)w, (u32)h};
     }
     if (!ext.width || !ext.height) return false;   // minimised
@@ -2096,11 +2096,18 @@ bool create_swapchain() {
     std::vector<VkPresentModeKHR> modes(nm);
     vkGetPhysicalDeviceSurfacePresentModesKHR(g_phys, g_surface, &nm, modes.data());
     auto has = [&](VkPresentModeKHR m) { return std::find(modes.begin(), modes.end(), m) != modes.end(); };
-    // F1CE_VSYNC as in host_sdl.cpp: 1 = wait for vblank, 0 = off, -1 = adaptive
-    int vs = getenv("F1CE_VSYNC") ? atoi(getenv("F1CE_VSYNC")) : 1;
+    // F1CE_VSYNC: 1 = wait for vblank (FIFO), 0 = off (Immediate), -1 = adaptive (FIFO Relaxed), mailbox/fast = low-latency triple buffer
+    const char* vs_env = getenv("F1CE_VSYNC");
+    const bool mailbox_requested = vs_env && (!strcmp(vs_env, "mailbox") || !strcmp(vs_env, "fast") || !strcmp(vs_env, "2"));
+    int vs = vs_env ? atoi(vs_env) : 1;
     VkPresentModeKHR mode = VK_PRESENT_MODE_FIFO_KHR;
-    if (vs == 0) mode = has(VK_PRESENT_MODE_IMMEDIATE_KHR) ? VK_PRESENT_MODE_IMMEDIATE_KHR : has(VK_PRESENT_MODE_MAILBOX_KHR) ? VK_PRESENT_MODE_MAILBOX_KHR : mode;
-    if (vs < 0 && has(VK_PRESENT_MODE_FIFO_RELAXED_KHR)) mode = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
+    if (mailbox_requested && has(VK_PRESENT_MODE_MAILBOX_KHR)) {
+        mode = VK_PRESENT_MODE_MAILBOX_KHR;
+    } else if (vs == 0) {
+        mode = has(VK_PRESENT_MODE_IMMEDIATE_KHR) ? VK_PRESENT_MODE_IMMEDIATE_KHR : has(VK_PRESENT_MODE_MAILBOX_KHR) ? VK_PRESENT_MODE_MAILBOX_KHR : mode;
+    } else if (vs < 0 && has(VK_PRESENT_MODE_FIFO_RELAXED_KHR)) {
+        mode = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
+    }
     VkSwapchainCreateInfoKHR ci{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
     ci.surface = g_surface;
     ci.minImageCount = std::max(caps.minImageCount, 3u);

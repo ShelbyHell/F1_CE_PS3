@@ -23,12 +23,7 @@ void present(u32 ea, u32 pitch, u32 width, u32 height) {
     static u32 frames = 0;
     if (++frames % 60 == 1) LOG_I("present #%u: fb %08x %ux%u pitch %u", frames, ea, width, height, pitch);
 }
-bool gl_begin() { return false; }
-void* gl_proc(const char*) { return nullptr; }
-void gl_swap() {}
-void* gl_create_shared_context(bool) { return nullptr; }
-bool gl_make_current(void*) { return false; }
-void gl_drawable_size(int* w, int* h) { *w = *h = 0; }
+void window_drawable_size(int* w, int* h) { *w = *h = 0; }
 bool dump_frame_due() { return false; }
 void dump_frame(const u32*, u32, u32) {}
 }  // namespace host

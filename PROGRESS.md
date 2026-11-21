@@ -1207,3 +1207,8 @@ sceNp (22: manager/basic/ticket only, no NP matching), cellRtc, cellSysCacheMoun
   Not tested: two PCs / internet latency, races to the finish, more than two players, Linux.
 - Menu script for tests: profile load needs F1CE_SAVE_UI=0; LAN user name with the game keyboard (down, down, right,
   cross = "a" ...; the check mark then focuses Create User Name by itself).
+
+**2026-11-21** – Pure Vulkan architecture & Super Ultra-Wide support:
+- Dropped legacy OpenGL 3.3 backend (`runtime/rsx_gl.cpp`), removed `opengl32.dll` dependency and OpenGL context creation in SDL.
+- Direct Vulkan swapchain presentation: added support for low-latency `VK_PRESENT_MODE_MAILBOX_KHR` (Fast Sync / Triple buffer) via `F1CE_VSYNC=mailbox`.
+- Super Ultra-Wide support: added 32:9 resolutions (3840x1080, 5120x1440), raised scale factor limit to 8.0x in `hle_aspect.cpp`, and calibrated real-time Tyre HUD safe-area alignment on ultra-wide monitors.
