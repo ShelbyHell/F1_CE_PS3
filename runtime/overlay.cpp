@@ -631,21 +631,18 @@ void draw_tyre_hud(ImDrawList* dl, float W, float H) {
     const u32 slip = (ld32(car + slick::CarOffset::WheelSlip) >> 8) & 0xf;
     const bool is_stock_grooved = (compound == slick::Compound::baseline && slick::selected_preset() == slick::Preset::stock);
 
+    const auto& telem = slick::player_tyre_telemetry();
+
     for (int w = 0; w < 4; ++w) {
         const float wear = std::bit_cast<float>(ld32(car + slick::CarOffset::TyreWear + 4 * w));
         const float worn_pct = std::clamp(wear / 0.65f * 100.0f, 0.0f, 100.0f);
         const float life_pct = 100.0f - worn_pct;
         const bool slipping = ((slip >> w) & 1) != 0;
+        const float temp = telem.temps[w].load(std::memory_order_relaxed);
 
-        // Siemens 2006 broadcast telemetry tyre wear palette
-        ImU32 tyre_col;
-        if (life_pct >= 70.0f) {
-            tyre_col = IM_COL32(0, 195, 110, 240);       // Fresh / Optimal: Siemens Green
-        } else if (life_pct >= 40.0f) {
-            tyre_col = IM_COL32(245, 180, 25, 240);      // Worn: Siemens Amber
-        } else {
-            tyre_col = IM_COL32(225, 45, 45, 240);       // Critical: Warning Red
-        }
+        // Siemens broadcast thermochromic palette (cold blue -> optimal green -> overheating amber/red)
+        const auto rgba = slick::thermochromic_color(temp, compound);
+        const ImU32 tyre_col = IM_COL32(rgba.r, rgba.g, rgba.b, rgba.a);
 
         const ImVec2 p0(xs[w], ys[w]), p1(xs[w] + tw, ys[w] + th);
         dl->AddRectFilled(p0, p1, tyre_col, 3.0f * S);
@@ -654,7 +651,7 @@ void draw_tyre_hud(ImDrawList* dl, float W, float H) {
         if (is_stock_grooved) {
             for (int g = 1; g <= 3; ++g) {
                 const float gx = xs[w] + tw * (g * 0.25f);
-                dl->AddLine(ImVec2(gx, ys[w] + 3.0f * S), ImVec2(gx, ys[w] + th - 3.0f * S), IM_COL32(10, 15, 20, 150), 1.0f);
+                dl->AddLine(ImVec2(gx, ys[w] + 3.0f * S), ImVec2(gx, ys[w] + th - 3.0f * S), IM_COL32(10, 15, 20, 120), 1.0f);
             }
         }
 
@@ -666,16 +663,34 @@ void draw_tyre_hud(ImDrawList* dl, float W, float H) {
             dl->AddRect(p0, p1, IM_COL32(15, 20, 25, 180), 3.0f * S, 0, 1.0f);
         }
 
-        // Percentage text
+        // Top Row: Wheel position label (left) and Wear Life % (right)
+        text(dl, F.semi, 7.5f * S, ImVec2(xs[w] + 2.5f * S, ys[w] + 1.8f * S), IM_COL32(15, 22, 28, 240), wheel_names[w]);
         char pct_str[8];
         snprintf(pct_str, sizeof(pct_str), "%.0f%%", life_pct);
-        const float str_w = text_w(F.semi, 10.0f * S, pct_str);
-        const ImU32 text_col = (life_pct < 40.0f) ? TEXT_WHITE : IM_COL32(12, 18, 22, 255);
-        text(dl, F.semi, 10.0f * S, ImVec2(xs[w] + (tw - str_w) * 0.5f, ys[w] + (th - 10.0f * S) * 0.5f), text_col, pct_str);
+        const float pct_w = text_w(F.semi, 7.5f * S, pct_str);
+        text(dl, F.semi, 7.5f * S, ImVec2(xs[w] + tw - pct_w - 2.5f * S, ys[w] + 1.8f * S), IM_COL32(15, 22, 28, 240), pct_str);
 
-        // Wheel position label (FL, FR, RL, RR)
-        text(dl, F.semi, 7.5f * S, ImVec2(xs[w] + 2.5f * S, ys[w] + 1.5f * S),
-             (life_pct < 40.0f ? IM_COL32(255, 210, 210, 220) : IM_COL32(10, 45, 35, 200)), wheel_names[w]);
+        // Center: Bold wheel temperature in °C with subtle drop shadow
+        char temp_str[10];
+        snprintf(temp_str, sizeof(temp_str), "%.0f°C", temp);
+        const float t_str_w = text_w(F.black, 10.5f * S, temp_str);
+        const float t_x = xs[w] + (tw - t_str_w) * 0.5f;
+        const float t_y = ys[w] + (th - 10.5f * S) * 0.48f;
+        text(dl, F.black, 10.5f * S, ImVec2(t_x + 0.8f * S, t_y + 0.8f * S), IM_COL32(0, 0, 0, 160), temp_str);
+        text(dl, F.black, 10.5f * S, ImVec2(t_x, t_y), TEXT_WHITE, temp_str);
+
+        // Bottom: Wear progress indicator bar
+        const float bar_y = ys[w] + th - 3.8f * S;
+        const float bar_h = 2.0f * S;
+        const float bar_x0 = xs[w] + 3.0f * S, bar_x1 = xs[w] + tw - 3.0f * S;
+        const float bar_w = bar_x1 - bar_x0;
+        dl->AddRectFilled(ImVec2(bar_x0, bar_y), ImVec2(bar_x1, bar_y + bar_h), IM_COL32(0, 0, 0, 150), 1.0f);
+        if (life_pct > 0.0f) {
+            const ImU32 bar_col = life_pct >= 70.0f ? IM_COL32(255, 255, 255, 230)
+                                : life_pct >= 40.0f ? IM_COL32(255, 215, 0, 230)
+                                : IM_COL32(255, 60, 60, 240);
+            dl->AddRectFilled(ImVec2(bar_x0, bar_y), ImVec2(bar_x0 + bar_w * (life_pct / 100.0f), bar_y + bar_h), bar_col, 1.0f);
+        }
     }
 
     // Footer divider line

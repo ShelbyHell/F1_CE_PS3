@@ -98,4 +98,92 @@ int main() {
     // Over-braking into left turn with heavily unloaded inside FL (< 20% of front axle load):
     const auto hard_scrub_left = slick::trail_brake_grip(100.0f, -0.60f, 600.0f, 6000.0f, 800.0f, 1800.0f, 0.58f);
     assert(hard_scrub_left.fl_mult < 1.0f); // inside front scrubs
+
+    // ========================================================================
+    // Tyre Thermodynamics & Operating Thermal Windows
+    // ========================================================================
+    const auto win_soft = slick::compound_thermal_window(Compound::soft);
+    const auto win_hard = slick::compound_thermal_window(Compound::hard);
+    const auto win_base = slick::compound_thermal_window(Compound::baseline);
+
+    assert(win_soft.opt_min == 85.0f && win_soft.opt_max == 105.0f);
+    assert(win_hard.opt_min == 95.0f && win_hard.opt_max == 115.0f);
+    assert(win_base.opt_min == 80.0f && win_base.opt_max == 102.0f);
+
+    // Thermal grip tests
+    // 1. Optimum thermal window yields 100% grip (1.0f)
+    assert(slick::thermal_grip_factor(Compound::soft, 85.0f) == 1.0f);
+    assert(slick::thermal_grip_factor(Compound::soft, 95.0f) == 1.0f);
+    assert(slick::thermal_grip_factor(Compound::soft, 105.0f) == 1.0f);
+
+    assert(slick::thermal_grip_factor(Compound::hard, 95.0f) == 1.0f);
+    assert(slick::thermal_grip_factor(Compound::hard, 105.0f) == 1.0f);
+    assert(slick::thermal_grip_factor(Compound::hard, 115.0f) == 1.0f);
+
+    // 2. Cold tyres have reduced grip
+    const float cold_grip_30 = slick::thermal_grip_factor(Compound::soft, 30.0f);
+    const float cold_grip_60 = slick::thermal_grip_factor(Compound::soft, 60.0f);
+    const float warm_grip_80 = slick::thermal_grip_factor(Compound::soft, 80.0f);
+    assert(cold_grip_30 < cold_grip_60);
+    assert(cold_grip_60 < warm_grip_80);
+    assert(warm_grip_80 < 1.0f);
+    assert(cold_grip_30 >= 0.80f); // cold slick drop-off
+
+    // 3. Overheated tyres have reduced grip (greasy / blistered)
+    const float hot_grip_110 = slick::thermal_grip_factor(Compound::soft, 110.0f);
+    const float hot_grip_125 = slick::thermal_grip_factor(Compound::soft, 125.0f);
+    const float hot_grip_140 = slick::thermal_grip_factor(Compound::soft, 140.0f);
+    assert(hot_grip_110 < 1.0f);
+    assert(hot_grip_125 < hot_grip_110);
+    assert(hot_grip_140 < hot_grip_125);
+    assert(hot_grip_140 >= 0.70f);
+
+    // Thermal wear factor tests
+    assert(slick::thermal_wear_factor(Compound::soft, 95.0f) == 1.0f);
+    assert(slick::thermal_wear_factor(Compound::soft, 105.0f) == 1.0f);
+    const float wear_hot_115 = slick::thermal_wear_factor(Compound::soft, 115.0f);
+    const float wear_hot_130 = slick::thermal_wear_factor(Compound::soft, 130.0f);
+    assert(wear_hot_115 > 1.0f);
+    assert(wear_hot_130 > wear_hot_115);
+    assert(wear_hot_130 <= 3.5f);
+
+    // Thermochromic color tests
+    const auto col_cold = slick::thermochromic_color(50.0f, Compound::soft);
+    assert(col_cold.b > col_cold.r && col_cold.b > col_cold.g); // Deep Blue dominant
+
+    const auto col_opt = slick::thermochromic_color(95.0f, Compound::soft);
+    assert(col_opt.g == 195 && col_opt.r == 0); // Pure Siemens Green
+
+    const auto col_warm = slick::thermochromic_color(112.0f, Compound::soft);
+    assert(col_warm.r > 200 && col_warm.g > 100); // Amber
+
+    const auto col_overheat = slick::thermochromic_color(130.0f, Compound::soft);
+    assert(col_overheat.r > col_overheat.g && col_overheat.r > col_overheat.b); // Red dominant
+
+    // Dynamic wheel thermal integration
+    slick::WheelThermal wt;
+    wt.surface = 85.0f;
+    wt.carcass = 85.0f;
+
+    // Cornering scrub under load at 220 km/h (61 m/s) with steer = 0.35f
+    const float dt = 0.00555f; // ~180 Hz substep
+    for (int i = 0; i < 360; ++i) { // 2 seconds of hard cornering
+        wt.step(dt, 61.0f, 4500.0f, false, 0.35f, 0.8f, true, Compound::soft);
+    }
+    assert(wt.surface > 85.0f); // Surface heats up from scrub
+    assert(wt.carcass > 85.0f); // Carcass absorbs heat
+
+    // Severe lockup under heavy braking (1.0 second slide)
+    const float pre_lock = wt.surface;
+    for (int i = 0; i < 180; ++i) {
+        wt.step(dt, 40.0f, 5000.0f, true, 0.0f, 0.0f, true, Compound::soft);
+    }
+    assert(wt.surface > pre_lock + 5.0f); // Noticeable spike from lockup friction
+
+    // Straight line cooling at high speed (300 km/h [83 m/s], 0 steer, 0 slip)
+    const float pre_cool = wt.surface;
+    for (int i = 0; i < 900; ++i) { // 5 seconds on straight
+        wt.step(dt, 83.0f, 3000.0f, false, 0.0f, 1.0f, true, Compound::soft);
+    }
+    assert(wt.surface < pre_cool); // High speed airflow cools the surface
 }

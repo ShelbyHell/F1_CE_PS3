@@ -46,7 +46,7 @@ void slick_telemetry(u32 car, float speed, u64 now, bool driving) {
     static FILE* csv = [] {
         FILE* out = std::fopen("slick_telemetry.csv", "w");
         if (!out) { LOG_W("slick telemetry: could not open slick_telemetry.csv"); return out; }
-        std::fputs("elapsed_s,car,speed_kmh,pad_steer,throttle,gear,contact_mask,slip_0,slip_1,slip_2,slip_3,load_0,load_1,load_2,load_3,wear_0,wear_1,wear_2,wear_3,tyre_flags,wear_mode,slick_eligible,player_driving,wake_dist,wake_intensity\n", out);
+        std::fputs("elapsed_s,car,speed_kmh,pad_steer,throttle,gear,contact_mask,slip_0,slip_1,slip_2,slip_3,load_0,load_1,load_2,load_3,wear_0,wear_1,wear_2,wear_3,temp_0,temp_1,temp_2,temp_3,tyre_flags,wear_mode,slick_eligible,player_driving,wake_dist,wake_intensity\n", out);
         return out;
     }();
     if (!csv) return;
@@ -55,7 +55,8 @@ void slick_telemetry(u32 car, float speed, u64 now, bool driving) {
     const float steer = axis / (axis < 0 ? 128.0f : 127.0f);
     const u32 slip = (ld32(car + slick::CarOffset::WheelSlip) >> 8) & 0xf;
     const auto wake = slick::current_wake();
-    std::fprintf(csv, "%.3f,%08x,%.3f,%.4f,%.4f,%d,%u,%u,%u,%u,%u,%.3f,%.3f,%.3f,%.3f,%.6f,%.6f,%.6f,%.6f,%08x,%u,%d,%d,%.2f,%.3f\n",
+    const auto& p_telem = slick::player_tyre_telemetry();
+    std::fprintf(csv, "%.3f,%08x,%.3f,%.4f,%.4f,%d,%u,%u,%u,%u,%u,%.3f,%.3f,%.3f,%.3f,%.6f,%.6f,%.6f,%.6f,%.1f,%.1f,%.1f,%.1f,%08x,%u,%d,%d,%.2f,%.3f\n",
                  (now - start) / 1e6, car, speed, steer,
                  ldf(car + slick::CarOffset::Throttle),
                  (int)(s8)ld8(car + slick::CarOffset::Gear),
@@ -69,6 +70,10 @@ void slick_telemetry(u32 car, float speed, u64 now, bool driving) {
                  ldf(car + slick::CarOffset::TyreWear + 4),
                  ldf(car + slick::CarOffset::TyreWear + 8),
                  ldf(car + slick::CarOffset::TyreWear + 12),
+                 p_telem.temps[0].load(std::memory_order_relaxed),
+                 p_telem.temps[1].load(std::memory_order_relaxed),
+                 p_telem.temps[2].load(std::memory_order_relaxed),
+                 p_telem.temps[3].load(std::memory_order_relaxed),
                  ld32(car + slick::CarOffset::TyreFlags),
                  ld32(car + slick::CarOffset::WearMode),
                  (int)slick::physics_eligible(car), (int)driving,

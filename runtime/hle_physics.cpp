@@ -33,6 +33,31 @@ struct TrackedCar {
 static std::array<TrackedCar, 32> g_all_cars{};
 static std::atomic<size_t> g_car_count{0};
 
+struct ThermalSlot {
+    u32 car = 0;
+    u64 seen = 0;
+    slick::CarThermalState state;
+};
+static std::array<ThermalSlot, 32> g_thermal_cars{};
+
+static slick::CarThermalState& get_car_thermal(u32 car, slick::Compound comp) {
+    const u64 now = time_usec();
+    for (auto& s : g_thermal_cars) {
+        if (s.car == car) {
+            s.seen = now;
+            if (!s.state.initialized) s.state.init(comp);
+            return s.state;
+        }
+    }
+    auto oldest = std::min_element(g_thermal_cars.begin(), g_thermal_cars.end(),
+                                   [](const ThermalSlot& a, const ThermalSlot& b) { return a.seen < b.seen; });
+    oldest->car = car;
+    oldest->seen = now;
+    oldest->state = {};
+    oldest->state.init(comp);
+    return oldest->state;
+}
+
 static void slick_register_car(u32 car) {
     if (!car) return;
     const u64 now = time_usec();
@@ -58,12 +83,23 @@ static void slick_register_car(u32 car) {
 }
 
 void slick_wear_probe(PPUContext& c) {
-    if (slick_test_car((u32)c.r[31]) == slick::Preset::stock) return;
+    const u32 car = (u32)c.r[31];
+    if (slick_test_car(car) == slick::Preset::stock) return;
     // The stock path still decides whether to accumulate wear, and clamps it.
-    const float rate = slick::wear_multiplier(slick::selected_compound());
+    const auto compound = slick::selected_compound();
+    float rate = slick::wear_multiplier(compound);
+
+    const auto& thermal = get_car_thermal(car, compound);
+    float max_temp = 0.0f;
+    for (int w = 0; w < 4; ++w) max_temp = std::max(max_temp, thermal.wheels[w].temp());
+    const float therm_wear = slick::thermal_wear_factor(compound, max_temp);
+    rate *= therm_wear;
+
     c.f[0].d = (float)c.f[0].d * rate;
     static std::atomic_flag logged{};
-    if (!logged.test_and_set(std::memory_order_relaxed)) LOG_I("slick test: wear increment x%.2f", rate);
+    if (!logged.test_and_set(std::memory_order_relaxed))
+        LOG_I("slick test: wear increment x%.2f (compound x%.2f, thermal x%.2f, peak temp %.1f C)",
+              rate, slick::wear_multiplier(compound), therm_wear, max_temp);
 }
 
 void slick_grip_probe(PPUContext& c) {
@@ -116,10 +152,37 @@ void slick_grip_probe(PPUContext& c) {
     }
     const auto compound = slick::selected_compound();
     const float trail_mults[4] = {trail.fl_mult, trail.fr_mult, trail.rl_mult, trail.rr_mult};
+
+    auto& thermal = get_car_thermal(car, compound);
+    const u64 now = time_usec();
+    float dt = thermal.last_update_us > 0 ? (now - thermal.last_update_us) * 1e-6f : (1.0f / 180.0f);
+    dt = std::clamp(dt, 0.001f, 0.05f);
+    thermal.last_update_us = now;
+
+    const float steer_input = (car == slick::player_car()) ? slick::player_pad_steer() : 0.0f;
+    const float throttle_val = ldf32(car + slick::CarOffset::Throttle);
+    const u32 slip_mask = (ld32(car + slick::CarOffset::WheelSlip) >> 8) & 0xf;
+
+    for (int wheel = 0; wheel < 4; ++wheel) {
+        const float load = ldf32(car + slick::CarOffset::WheelLoads + 4 * wheel);
+        const bool slipping = ((slip_mask >> wheel) & 1) != 0;
+        thermal.wheels[wheel].step(dt, speed, load, slipping, steer_input, throttle_val, wheel < 2, compound);
+    }
+
+    if (car == slick::player_car()) {
+        auto& p_telem = slick::player_tyre_telemetry();
+        for (int wheel = 0; wheel < 4; ++wheel) {
+            p_telem.temps[wheel].store(thermal.wheels[wheel].temp(), std::memory_order_relaxed);
+            p_telem.surface_temps[wheel].store(thermal.wheels[wheel].surface, std::memory_order_relaxed);
+            p_telem.carcass_temps[wheel].store(thermal.wheels[wheel].carcass, std::memory_order_relaxed);
+        }
+    }
+
     // Guest lanes 0/1 are the front axle; VMX stores lane 0 at f[3].
     for (int wheel = 0; wheel < 4; ++wheel) {
         const float wear = compound == slick::Compound::baseline ? 0.0f : ldf32(car + slick::CarOffset::TyreWear + 4 * wheel);
-        c.v[0].f[3 - wheel] *= (wheel < 2 ? front : rear) * slick::compound_grip(compound, wear) * trail_mults[wheel];
+        const float therm_grip = slick::thermal_grip_factor(compound, thermal.wheels[wheel].temp());
+        c.v[0].f[3 - wheel] *= (wheel < 2 ? front : rear) * slick::compound_grip(compound, wear) * trail_mults[wheel] * therm_grip;
     }
     static std::atomic_flag logged{};
     if (!logged.test_and_set(std::memory_order_relaxed))

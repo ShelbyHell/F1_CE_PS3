@@ -282,7 +282,7 @@ std::vector<Option> make_options() {
                               "Brake balance between front and rear axles. Affects trail braking rotation into corners."),
                        "F1CE_HANDLING", nullptr));
     v.push_back(toggle(QUICK_RACE, "Tyre HUD widget", "F1CE_TYRE_HUD",
-                       "In-game on-screen display showing individual tyre wear %, compound, slip indicator, speed and dirty air / slipstream status."));
+                       "In-game on-screen display showing individual tyre wear %, live temperatures in °C with thermochromic color transitions, compound, slip indicator, and aerodynamic wake status."));
     v.push_back(toggle(QUICK_RACE, "Physics telemetry (CSV)", "F1CE_TELEMETRY",
                        "Records player inputs, speed, wheelspin and wear at 10 Hz in slick_telemetry.csv. Works in Stock too."));
 

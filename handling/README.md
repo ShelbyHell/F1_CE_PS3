@@ -55,12 +55,31 @@ Corner entry under braking dynamically evaluates load transfer across axles:
 - **Inside Wheel Lockup / Scrub:** Over-braking into a turn with an unloaded inside front tyre causes progressive grip scrub and understeer.
 - **Brake Bias:** Configurable via launcher or `F1CE_BRAKE_BIAS` (default `56` for 56% front; `58` for high-speed stability; `54` for agile low-speed rotation).
 
+### Dynamic Tyre Thermodynamics & Thermal Windows
+
+The tyre model features a dual-layer thermodynamic simulation (tread surface and structural carcass):
+- **Heat Generation:**
+  - *Lateral Scrub Friction:* Cornering slip work ($F_y \cdot v_{slip}$) heats the tyre surface proportional to steering angle, speed, and lateral load.
+  - *Longitudinal Friction:* Wheelspin under power and lockup slides under braking rapidly spike surface temperatures.
+  - *Carcass Flexure:* Cyclic rolling deformation under aerodynamic and chassis downforce ($F_z$) heats the inner carcass.
+- **Convective Airflow Cooling & Conduction:** High-speed airflow convective cooling ($h(v) \cdot (T - T_{amb})$) dissipates heat on straights, while thermal conduction transfers heat between surface and carcass.
+- **Compound Operating Windows:**
+  - **Soft:** 85–105 °C (peak 95 °C). High initial grip (+4%), rapid warm-up, but prone to thermal degradation if overdriven.
+  - **Hard:** 95–115 °C (peak 105 °C). Requires vigorous warm-up laps; highly resistant to overheating and long-stint degradation.
+  - **Baseline:** 80–102 °C (peak 90 °C). Balanced general window.
+- **Thermal Grip & Wear Scaling:**
+  - Operating within the compound window delivers 100% grip.
+  - Cold tyres experience progressive grip drop-off (down to ~84% at ambient).
+  - Overheated tyres become blistered/greasy, losing up to 30% grip and multiplying tyre degradation up to 3.5× normal wear rates.
+
 ### In-Game Tyre HUD Widget
 
 Enable **Tyre HUD widget** in the launcher or set `F1CE_TYRE_HUD=1`. A compact on-screen dashboard styled in authentic Formula 1 2006 FOM / Siemens TV broadcast graphics displays directly above the in-game speedometer/rev-counter in the lower right:
 - Authentic Siemens petrol/teal header (`SIEMENS`) with slanted FOM 2006 styling and compound badge (`SOFT`, `HARD`, `TYRES`).
-- F1 chassis silhouette with four individual tyre pods (FL, FR, RL, RR) showing percentage life remaining and grooved/slick pattern.
-- Siemens broadcast colour coding: emerald green (fresh >70%), amber (worn 40-70%), and warning red (critical <40%).
+- F1 chassis silhouette with four individual tyre pods (FL, FR, RL, RR) displaying live temperature in °C, wear life %, and grooved/slick pattern.
+- **Thermochromic Broadcast Palette:** Smoothly transitions tyre pod colors reflecting thermodynamic status:
+  - Deep cold blue / cyan (<80 °C) $\to$ authentic Siemens green (85–105 °C optimal) $\to$ amber (105–115 °C hot) $\to$ warning red (>120 °C severe overheat).
+- Integrated wear life percentage and miniature progress bar at the base of each tyre pod.
 - White and electric cyan pulsing borders when wheelspin or lockup slip occurs.
 - Telemetry footer with aerodynamic wake status (`CLEAN AIR`, `TURBULENCE`, `SLIPSTREAM`) and brake bias setting (`BIAS 56%`).
 - Positioned seamlessly above the game's native rev counter without overlapping or gamepad/wheel input interference.
@@ -69,11 +88,11 @@ Enable **Tyre HUD widget** in the launcher or set `F1CE_TYRE_HUD=1`. A compact o
 
 Set `F1CE_TYRE_COMPOUND=soft` or `hard` (or legacy `F1CE_SLICK_COMPOUND`) before launch (or in `local.cmd`). Leave it unset for the baseline. This is a session-wide preset for eligible dry tyres, not an extra compound choice in the game's pit menu. It has no effect with stock physics.
 
-| Compound | Wear rate vs. stock | Extra grip factor vs. the selected preset |
-| --- | --- | --- |
-| Baseline | ×1.25 | ×1.00 |
-| Soft | ×1.55 | ×1.04 fresh, falling to ×0.92 with wear |
-| Hard | ×0.90 | ×0.98 fresh, falling to ×0.965 with wear |
+| Compound | Wear rate vs. stock | Extra grip factor vs. the selected preset | Operating Thermal Window |
+| --- | --- | --- | --- |
+| Baseline | ×1.25 | ×1.00 | 80–102 °C |
+| Soft | ×1.55 | ×1.04 fresh, falling to ×0.92 with wear | 85–105 °C |
+| Hard | ×0.90 | ×0.98 fresh, falling to ×0.965 with wear | 95–115 °C |
 
 The grip curve uses each wheel's own wear value and saturates at `0.65` internal wear units. The factors are initial tuning targets, not measured stint lengths.
 
@@ -81,7 +100,7 @@ The grip curve uses each wheel's own wear value and saturates at `0.65` internal
 
 Enable **Physics telemetry (CSV)** or set `F1CE_TELEMETRY=1` (or legacy `F1CE_SLICK_TELEMETRY=1`) before launching a script. The game writes `slick_telemetry.csv` in its working directory (`handling` for the scripts) at approximately 10 Hz while the player drives. Stock physics can log too. Each run with driving samples overwrites the previous CSV; rename it before comparing runs.
 
-The CSV includes speed in km/h, pad steering command (not road-wheel angle), throttle, gear, contact and wheel slip, wheel load, internal wear, raw tyre flags, the current wear mode, physics eligibility, and whether the player is driving. Career dry sessions use base tyre flags `0x19` and wear mode `1`; Quick Race uses wear mode `2`. The transient `0x3000` status bits are ignored. It also samples the player car during hand-offs, such as pit-lane control; `player_driving` distinguishes those rows. Wheel indices 0–1 are front; 2–3 are rear.
+The CSV includes speed in km/h, pad steering command (not road-wheel angle), throttle, gear, contact and wheel slip, wheel load, internal wear, wheel temperatures (`temp_0`..`temp_3` in °C), raw tyre flags, the current wear mode, physics eligibility, and whether the player is driving. Career dry sessions use base tyre flags `0x19` and wear mode `1`; Quick Race uses wear mode `2`. The transient `0x3000` status bits are ignored. It also samples the player car during hand-offs, such as pit-lane control; `player_driving` distinguishes those rows. Wheel indices 0–1 are front; 2–3 are rear.
 
 To compare Stock and 2026, keep the car, track, assists, fuel load and weather the same. Mark the same corner and start/finish line crossings on each CSV's elapsed-time scale. For example, from the repository root:
 

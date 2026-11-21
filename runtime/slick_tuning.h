@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <string_view>
@@ -158,6 +159,180 @@ inline bool dry_wear_state(unsigned tyre_flags, unsigned wear_mode) {
     // Career uses wear mode 1; Quick Race uses 2. 0x3000 is a transient
     // session/status field, while the low 5 bits identify the dry surface.
     return (tyre_flags & 0x1fu) == 0x19u && (wear_mode == 1u || wear_mode == 2u);
+}
+
+// ============================================================================
+// Dynamic Tyre Thermodynamics (Surface / Carcass & Thermal Grip Window)
+// ============================================================================
+struct ThermalWindow {
+    float opt_min = 85.0f;
+    float opt_max = 105.0f;
+    float peak    = 95.0f;
+};
+
+inline constexpr ThermalWindow compound_thermal_window(Compound c) {
+    switch (c) {
+        case Compound::soft:
+            return {85.0f, 105.0f, 95.0f};
+        case Compound::hard:
+            return {95.0f, 115.0f, 105.0f};
+        case Compound::baseline:
+        default:
+            return {80.0f, 102.0f, 90.0f};
+    }
+}
+
+inline float thermal_grip_factor(Compound c, float temp) {
+    const auto win = compound_thermal_window(c);
+    if (temp >= win.opt_min && temp <= win.opt_max) {
+        return 1.0f;
+    }
+    if (temp < win.opt_min) {
+        const float cold_range = std::max(win.opt_min - 25.0f, 10.0f);
+        const float ratio = std::clamp((win.opt_min - temp) / cold_range, 0.0f, 1.0f);
+        return 1.0f - 0.16f * ratio * ratio;
+    }
+    // Overheated degradation
+    const float hot_range = 35.0f;
+    const float ratio = std::clamp((temp - win.opt_max) / hot_range, 0.0f, 2.0f);
+    return std::max(1.0f - 0.18f * ratio * ratio, 0.70f);
+}
+
+inline float thermal_wear_factor(Compound c, float temp) {
+    const auto win = compound_thermal_window(c);
+    if (temp <= win.opt_max) {
+        return 1.0f;
+    }
+    const float excess = (temp - win.opt_max) / 25.0f;
+    return std::min(1.0f + 1.5f * excess * excess, 3.5f);
+}
+
+struct WheelThermal {
+    float surface = 85.0f;
+    float carcass = 85.0f;
+
+    float temp() const { return 0.70f * surface + 0.30f * carcass; }
+
+    void step(float dt, float speed_mps, float load_n, bool slipping,
+              float steer_angle, float throttle, bool is_front, Compound comp) {
+        constexpr float T_ambient = 28.0f;
+
+        const float v = std::max(speed_mps, 0.0f);
+        const float load_norm = std::clamp(load_n / 3500.0f, 0.0f, 2.5f);
+
+        // Heat generation multipliers based on compound
+        const float comp_heat_mult = (comp == Compound::soft) ? 1.15f : (comp == Compound::hard) ? 0.90f : 1.0f;
+
+        // 1. Rolling deformation / carcass flexure heating
+        const float roll_heat = 0.35f * (v / 50.0f) * load_norm * comp_heat_mult;
+
+        // 2. Surface normal rolling friction & steering scrub
+        const float normal_scrub = 0.25f * (v / 50.0f) * load_norm * comp_heat_mult;
+        const float lat_scrub = is_front ? (0.065f * std::fabs(steer_angle) * v * load_norm * comp_heat_mult)
+                                         : (0.025f * std::fabs(steer_angle) * v * load_norm * comp_heat_mult);
+
+        // 3. Longitudinal slip (wheelspin on throttle / lockup on braking)
+        float slip_heat = 0.0f;
+        if (slipping) {
+            if (!is_front && throttle > 0.25f) {
+                // Wheelspin under power
+                slip_heat = 12.0f * throttle * (1.0f + v / 40.0f) * comp_heat_mult;
+            } else {
+                // Heavy braking lockup or cornering slide
+                slip_heat = 14.0f * std::clamp(v / 25.0f, 0.2f, 3.0f) * comp_heat_mult;
+            }
+        }
+
+        const float heat_surface = normal_scrub + lat_scrub + slip_heat;
+
+        // 4. Convective airflow cooling
+        const float h_surface = 0.0022f + 0.000085f * v;
+        const float cool_surface = h_surface * (surface - T_ambient);
+
+        const float h_carcass = 0.0008f + 0.000025f * v;
+        const float cool_carcass = h_carcass * (carcass - T_ambient);
+
+        // 5. Thermal conduction between surface and carcass
+        const float transfer = 1.6f * (surface - carcass);
+
+        // Integrate
+        surface += (heat_surface - cool_surface - transfer) * dt;
+        carcass += (roll_heat - cool_carcass + 0.45f * transfer) * dt;
+
+        surface = std::clamp(surface, T_ambient, 160.0f);
+        carcass = std::clamp(carcass, T_ambient, 160.0f);
+    }
+};
+
+struct CarThermalState {
+    WheelThermal wheels[4];
+    uint64_t last_update_us = 0;
+    bool initialized = false;
+
+    void init(Compound comp) {
+        const auto win = compound_thermal_window(comp);
+        for (int w = 0; w < 4; ++w) {
+            wheels[w].surface = win.peak - 5.0f;
+            wheels[w].carcass = win.peak - 5.0f;
+        }
+        initialized = true;
+    }
+};
+
+struct RgbaColor {
+    uint8_t r = 0, g = 0, b = 0, a = 255;
+};
+
+inline RgbaColor thermochromic_color(float temp, Compound compound) {
+    const auto win = compound_thermal_window(compound);
+
+    auto lerp_color = [](int r1, int g1, int b1, int r2, int g2, int b2, float t) -> RgbaColor {
+        t = std::clamp(t, 0.0f, 1.0f);
+        return {
+            static_cast<uint8_t>(r1 + (r2 - r1) * t),
+            static_cast<uint8_t>(g1 + (g2 - g1) * t),
+            static_cast<uint8_t>(b1 + (b2 - b1) * t),
+            240
+        };
+    };
+
+    if (temp < win.opt_min) {
+        const float t = std::clamp((temp - (win.opt_min - 20.0f)) / 20.0f, 0.0f, 1.0f);
+        if (t < 0.5f) {
+            return lerp_color(30, 90, 220, 0, 175, 215, t / 0.5f);
+        } else {
+            return lerp_color(0, 175, 215, 0, 195, 105, (t - 0.5f) / 0.5f);
+        }
+    }
+    if (temp <= win.opt_max) {
+        return {0, 195, 105, 240}; // Pure Siemens Green
+    }
+    // Overheated
+    const float t = std::clamp((temp - win.opt_max) / 20.0f, 0.0f, 1.0f);
+    if (t < 0.5f) {
+        return lerp_color(0, 195, 105, 245, 155, 20, t / 0.5f);
+    } else {
+        return lerp_color(245, 155, 20, 230, 40, 40, (t - 0.5f) / 0.5f);
+    }
+}
+
+struct PlayerTyreTelemetry {
+    std::atomic<float> temps[4];
+    std::atomic<float> surface_temps[4];
+    std::atomic<float> carcass_temps[4];
+
+    PlayerTyreTelemetry() {
+        for (int i = 0; i < 4; ++i) {
+            temps[i].store(85.0f, std::memory_order_relaxed);
+            surface_temps[i].store(85.0f, std::memory_order_relaxed);
+            carcass_temps[i].store(85.0f, std::memory_order_relaxed);
+        }
+    }
+};
+
+inline PlayerTyreTelemetry& player_tyre_telemetry() {
+    static PlayerTyreTelemetry telem;
+    return telem;
 }
 
 bool physics_eligible(unsigned car);
