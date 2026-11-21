@@ -171,7 +171,7 @@ void slick_grip_probe(PPUContext& c) {
     const float l2 = ldf32(car + slick::CarOffset::WheelLoads + 8);
     const float l3 = ldf32(car + slick::CarOffset::WheelLoads + 12);
     const float front_tot = l0 + l1, rear_tot = l2 + l3, tot_load = front_tot + rear_tot;
-    const float load_brake = (tot_load > 500.0f && front_tot / tot_load > 0.52f) ? std::clamp((front_tot / tot_load - 0.52f) / 0.16f, 0.0f, 1.0f) : 0.0f;
+    const float load_brake = (throttle_val < 0.15f && tot_load > 500.0f && front_tot / tot_load > 0.52f) ? std::clamp((front_tot / tot_load - 0.52f) / 0.16f, 0.0f, 1.0f) : 0.0f;
     const float brake_demand = std::max(pad_brake, load_brake);
     const float bias = slick::selected_brake_bias();
 
@@ -225,7 +225,8 @@ void slick_grip_probe(PPUContext& c) {
         }
         const bool is_time_trial = slick::is_time_trial_session() || (rivals_count == 0);
         const bool drs_active = slick::drs_enabled() && (is_time_trial || preset == slick::Preset::modern || preset == slick::Preset::w11);
-        drs.update(dt, speed * 3.6f, throttle_val, steer_input, brake_demand, slick::current_wake(),
+        const float drs_brake = (throttle_val > 0.15f) ? 0.0f : ((car == slick::player_car() && pad_brake > 0.0f) ? pad_brake : brake_demand);
+        drs.update(dt, speed * 3.6f, throttle_val, steer_input, drs_brake, slick::current_wake(),
                    btn_drs, slick::drs_auto_mode(), drs_active, is_time_trial);
         p_telem.drs_state.store((int)drs.state, std::memory_order_relaxed);
         static u64 last_drs_beep_us = 0;

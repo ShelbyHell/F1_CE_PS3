@@ -156,9 +156,8 @@ inline float compound_grip(Compound compound, float wear) {
 }
 
 inline bool dry_wear_state(unsigned tyre_flags, unsigned wear_mode) {
-    // Career uses wear mode 1; Quick Race uses 2. 0x3000 is a transient
-    // session/status field, while the low 5 bits identify the dry surface.
-    return (tyre_flags & 0x1fu) == 0x19u && (wear_mode == 1u || wear_mode == 2u);
+    // 0x3000 is a transient session/status field, while the low 5 bits identify the dry surface (0x19).
+    return (tyre_flags & 0x1fu) == 0x19u;
 }
 
 // ============================================================================
