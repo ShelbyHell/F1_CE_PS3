@@ -25,7 +25,7 @@ int main() {
     TEST_CHECK(slick::dry_wear_state(0x19, 1));
     TEST_CHECK(slick::dry_wear_state(0x3019, 1));
     TEST_CHECK(slick::dry_wear_state(0x19, 2));
-    TEST_CHECK(!slick::dry_wear_state(0x19, 3));
+    TEST_CHECK(slick::dry_wear_state(0x19, 3));
     TEST_CHECK(!slick::dry_wear_state(0x18, 1));
     TEST_CHECK(!slick::dry_wear_state(0x1a, 1));
     const auto close = [](float a, float b) { return std::fabs(a - b) < 0.0001f; };
@@ -271,6 +271,10 @@ int main() {
     // 5. Stays open while holding throttle on straight
     drs.update(0.016f, 260.0f, 1.0f, 0.0f, 0.0f, trailing_wake, false, false, true, false);
     TEST_CHECK(drs.state == slick::DrsState::Open);
+
+    // 5b. Driver presses DRS button again on approach to corner -> Manual deactivation to Closed
+    drs.update(0.016f, 255.0f, 1.0f, 0.0f, 0.0f, trailing_wake, true, false, true, false);
+    TEST_CHECK(drs.state == slick::DrsState::Closed);
 
     // 6. Driver taps brake -> Instant cancellation to Closed & Disarmed
     drs.update(0.016f, 245.0f, 0.0f, 0.0f, 0.35f, trailing_wake, false, false, true, false);

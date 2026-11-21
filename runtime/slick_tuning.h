@@ -472,7 +472,6 @@ struct DrsController {
     DrsState state = DrsState::Closed;
     bool btn_latched = false;
     bool armed = false;
-    bool on_straight = false;
     bool just_braked = false;
 
     void update(float dt, float speed_kmh, float throttle, float steer, float brake,
@@ -480,7 +479,6 @@ struct DrsController {
         if (!enabled) {
             state = DrsState::Closed;
             armed = false;
-            on_straight = false;
             just_braked = false;
             return;
         }
@@ -491,61 +489,62 @@ struct DrsController {
         }();
 
         const bool trailing_rival = (wake.in_slipstream || wake.dist_ahead < 70.0f || wake.intensity > 0.02f);
-        const bool eligible_at_detect = (is_time_trial || trailing_rival || drs_always);
+        const bool eligible = (is_time_trial || trailing_rival || drs_always);
 
-        // Core vehicle dynamics states
-        const bool braking = (brake > 0.08f);
-        const bool heavy_turn = (std::fabs(steer) > 0.28f);
-        const bool straight_steer = (std::fabs(steer) < 0.22f);
-
-        // 1. Braking Zone at end of straight: immediate cancellation and disarm
-        if (braking) {
+        // 1. BRAKING ZONE: Per FIA regulations, DRS is deactivated immediately upon applying brakes
+        if (brake > 0.08f) {
             state = DrsState::Closed;
             armed = false;
-            on_straight = false;
             just_braked = true;
             btn_latched = btn_drs;
             return;
         }
 
-        // When in a heavy turn or slowing down, reset the brake flag and keep DRS closed
-        if (heavy_turn || speed_kmh < 135.0f) {
+        // Slowing down in a corner or chicane resets the brake flag and holds DRS closed
+        if (speed_kmh < 135.0f || throttle < 0.20f) {
             just_braked = false;
-            state = DrsState::Closed;
-            armed = false;
-            on_straight = false;
-            btn_latched = btn_drs;
-            return;
+            if (state != DrsState::Open) {
+                state = DrsState::Closed;
+                armed = false;
+            }
         }
 
-        // 2. Detection Point: Approaching / accelerating out of corner onto straight
-        // Released brakes, applying power, steering unwinding, speed building (>115 km/h)
-        if (!armed && !on_straight && !just_braked && throttle > 0.50f && straight_steer && speed_kmh >= 115.0f) {
-            if (eligible_at_detect) {
+        // 2. DETECTION POINT: Approaching a straight (accelerating out of corner, speed > 115 km/h)
+        if (!armed && !just_braked && throttle > 0.50f && speed_kmh >= 115.0f && speed_kmh < 165.0f) {
+            if (eligible) {
                 armed = true;
                 state = DrsState::Armed;
             }
         }
 
-        // Flying lap / grid start rollout fallback: already at high speed on straight
-        if (!armed && !on_straight && speed_kmh >= 170.0f && straight_steer && throttle > 0.65f) {
-            if (eligible_at_detect) {
+        // Flying start / rollout on straight
+        if (!armed && !just_braked && speed_kmh >= 165.0f && throttle > 0.65f) {
+            if (eligible) {
                 armed = true;
             }
         }
 
-        // 3. Straight DRS Zone: High speed acceleration along the straight
-        on_straight = (speed_kmh >= 170.0f && throttle > 0.65f && straight_steer);
+        // 3. STRAIGHT DRS ZONE (speed >= 165 km/h, throttle > 0.65):
+        const bool on_straight = (speed_kmh >= 165.0f && throttle > 0.65f);
 
         if (state == DrsState::Open) {
-            // Stay open while accelerating down the straight
-            if (speed_kmh < 155.0f || throttle < 0.35f || heavy_turn) {
+            // Manual / automatic cancellation on approach to a corner:
+            // 1) Pressing the DRS button (Triangle) again shuts the flap manually at will before the turn
+            // 2) Lifting off throttle on approach / lift-and-coast (throttle < 0.75f)
+            // 3) Turning in for the corner (std::fabs(steer) > 0.35f)
+            // 4) Slowing down below straight speeds (speed_kmh < 155.0f)
+            const bool manual_close = (btn_drs && !btn_latched);
+            const bool throttle_lift = (throttle < 0.75f);
+            const bool corner_turn_in = (std::fabs(steer) > 0.35f);
+            const bool speed_drop = (speed_kmh < 155.0f);
+
+            if (manual_close || throttle_lift || corner_turn_in || speed_drop) {
                 state = DrsState::Closed;
                 armed = false;
-                on_straight = false;
+                just_braked = true;
             }
         } else if (on_straight && armed) {
-            // Reached DRS zone on the straight with valid authorization
+            // Reached straight with authorization
             if (auto_drs || (btn_drs && !btn_latched)) {
                 state = DrsState::Open;
             } else {
@@ -559,10 +558,12 @@ struct DrsController {
                 armed = false;
             }
         } else if (state == DrsState::Armed) {
-            // Waiting to reach the 170 km/h straight threshold
-            if (heavy_turn || throttle < 0.25f) {
-                state = DrsState::Closed;
-                armed = false;
+            if (on_straight) {
+                if (auto_drs || (btn_drs && !btn_latched)) {
+                    state = DrsState::Open;
+                } else {
+                    state = DrsState::Available;
+                }
             }
         } else {
             state = DrsState::Closed;
