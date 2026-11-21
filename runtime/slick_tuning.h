@@ -444,6 +444,22 @@ inline PlayerTyreTelemetry& player_tyre_telemetry() {
 }
 
 // ============================================================================
+// Session Mode Tracking (Time Trial / Test vs Grand Prix / Race)
+// ============================================================================
+inline std::atomic<bool>& time_trial_session_flag() {
+    static std::atomic<bool> flag{false};
+    return flag;
+}
+
+inline void set_time_trial_session(bool is_tt) {
+    time_trial_session_flag().store(is_tt, std::memory_order_relaxed);
+}
+
+inline bool is_time_trial_session() {
+    return time_trial_session_flag().load(std::memory_order_relaxed);
+}
+
+// ============================================================================
 // Drag Reduction System (DRS) & Dynamic Flap Controller
 // ============================================================================
 enum class DrsState : int {
@@ -457,21 +473,36 @@ struct DrsController {
     bool btn_latched = false;
 
     void update(float dt, float speed_kmh, float throttle, float steer, float brake,
-                const WakeInfo& wake, bool btn_drs, bool auto_drs, bool enabled) {
+                const WakeInfo& wake, bool btn_drs, bool auto_drs, bool enabled, bool is_time_trial = false) {
         if (!enabled) {
             state = DrsState::Closed;
             return;
         }
-
-        const bool on_straight = (speed_kmh > 175.0f && throttle > 0.80f && std::fabs(steer) < 0.16f);
-        const bool trailing_rival = (wake.in_slipstream || wake.dist_ahead < 70.0f || wake.intensity > 0.02f);
 
         static const bool drs_always = []{
             const char* e = std::getenv("F1CE_DRS");
             return e && std::strcmp(e, "always") == 0;
         }();
 
-        const bool eligible = on_straight && (trailing_rival || drs_always);
+        const bool time_trial_mode = is_time_trial || drs_always;
+
+        if (time_trial_mode) {
+            // In Time Trial mode, DRS is constantly enabled/active:
+            // It remains Open while driving/accelerating, temporarily closing only under braking.
+            if (brake > 0.08f) {
+                state = DrsState::Closed;
+            } else if (throttle > 0.15f || speed_kmh >= 35.0f || (btn_drs && !btn_latched) || (state == DrsState::Open && speed_kmh >= 20.0f)) {
+                state = DrsState::Open;
+            } else {
+                state = DrsState::Available;
+            }
+            btn_latched = btn_drs;
+            return;
+        }
+
+        const bool on_straight = (speed_kmh > 175.0f && throttle > 0.80f && std::fabs(steer) < 0.16f);
+        const bool trailing_rival = (wake.in_slipstream || wake.dist_ahead < 70.0f || wake.intensity > 0.02f);
+        const bool eligible = on_straight && trailing_rival;
 
         if (state == DrsState::Open) {
             // Cancel DRS if driver touches brakes, turns wheel, or lifts throttle

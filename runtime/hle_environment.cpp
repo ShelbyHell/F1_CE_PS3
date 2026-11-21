@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "kernel.h"
+#include "slick_tuning.h"
 
 namespace stdfs = std::filesystem;
 
@@ -109,7 +110,9 @@ void apply(Lines& base, const stdfs::path& p, const char* what) {
 bool environment_hook(PPUContext& c, bool env) {
     std::lock_guard lk(g_mutex);
     if (env) {
-        g_active = choice_for(c.r[5] != 0);
+        const bool is_tt = (c.r[5] != 0);
+        slick::set_time_trial_session(is_tt);
+        g_active = choice_for(is_tt);
         g_active_set = true;
     }
     if (!g_active_set || g_active.flag < 0) return false;

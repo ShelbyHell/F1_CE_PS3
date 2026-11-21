@@ -105,10 +105,12 @@ void slick_wear_probe(PPUContext& c) {
 void slick_grip_probe(PPUContext& c) {
     const u32 car = (u32)c.r[31];
     const auto preset = slick_test_car(car);
-    if (preset == slick::Preset::stock) return;
+    const bool is_player = (car == slick::player_car());
+    const bool is_tt = slick::is_time_trial_session() || (g_car_count.load(std::memory_order_relaxed) <= 1);
+    if (preset == slick::Preset::stock && !(is_player && is_tt)) return;
     const float speed = ldf32(car + slick::CarOffset::Speed);
     // This vector is computed afresh, then stored at car + 0x4d0.
-    float front = 1.05f, rear = 1.05f;
+    float front = 1.0f, rear = 1.0f;
     if ((preset == slick::Preset::modern || preset == slick::Preset::w11) && speed >= 0.0f) {
         const auto balance = preset == slick::Preset::w11 ? slick::w11_grip(speed * 3.6f) : slick::modern_grip(speed * 3.6f);
         front = balance.front;
@@ -213,11 +215,25 @@ void slick_grip_probe(PPUContext& c) {
         auto& drs = slick::global_drs_controller();
         const bool btn_drs = slick::player_pad_inputs().btn_triangle.load(std::memory_order_relaxed);
         const auto prev_drs = drs.state;
+        size_t rivals_count = 0;
+        const size_t total_cars = g_car_count.load(std::memory_order_relaxed);
+        for (size_t i = 0; i < total_cars; ++i) {
+            const u32 other = g_all_cars[i].car;
+            if (other && other != car && (now - g_all_cars[i].last_seen_us < 2000000)) {
+                ++rivals_count;
+            }
+        }
+        const bool is_time_trial = slick::is_time_trial_session() || (rivals_count == 0);
+        const bool drs_active = slick::drs_enabled() && (is_time_trial || preset == slick::Preset::modern || preset == slick::Preset::w11);
         drs.update(dt, speed * 3.6f, throttle_val, steer_input, brake_demand, slick::current_wake(),
-                   btn_drs, slick::drs_auto_mode(), slick::drs_enabled() && (preset == slick::Preset::modern || preset == slick::Preset::w11));
+                   btn_drs, slick::drs_auto_mode(), drs_active, is_time_trial);
         p_telem.drs_state.store((int)drs.state, std::memory_order_relaxed);
+        static u64 last_drs_beep_us = 0;
         if (drs.state != prev_drs && (drs.state == slick::DrsState::Available || drs.state == slick::DrsState::Open)) {
-            slick::global_audio_synth().trigger_drs_beep();
+            if (now - last_drs_beep_us > 3500000) {
+                last_drs_beep_us = now;
+                slick::global_audio_synth().trigger_drs_beep();
+            }
         }
 
         const float omega = ldf32(car + slick::CarOffset::EngineOmega);
@@ -227,10 +243,12 @@ void slick_grip_probe(PPUContext& c) {
     }
 
     // Guest lanes 0/1 are the front axle; VMX stores lane 0 at f[3].
-    for (int wheel = 0; wheel < 4; ++wheel) {
-        const float wear = compound == slick::Compound::baseline ? 0.0f : ldf32(car + slick::CarOffset::TyreWear + 4 * wheel);
-        const float therm_grip = slick::thermal_grip_factor(compound, thermal.wheels[wheel].temp());
-        c.v[0].f[3 - wheel] *= (wheel < 2 ? front : rear) * slick::compound_grip(compound, wear) * trail_mults[wheel] * therm_grip * brake_mults[wheel];
+    if (preset != slick::Preset::stock) {
+        for (int wheel = 0; wheel < 4; ++wheel) {
+            const float wear = compound == slick::Compound::baseline ? 0.0f : ldf32(car + slick::CarOffset::TyreWear + 4 * wheel);
+            const float therm_grip = slick::thermal_grip_factor(compound, thermal.wheels[wheel].temp());
+            c.v[0].f[3 - wheel] *= (wheel < 2 ? front : rear) * slick::compound_grip(compound, wear) * trail_mults[wheel] * therm_grip * brake_mults[wheel];
+        }
     }
     static std::atomic_flag logged{};
     if (!logged.test_and_set(std::memory_order_relaxed))
@@ -241,7 +259,8 @@ void slick_grip_probe(PPUContext& c) {
 void slick_drive_probe(PPUContext& c) {
     const u32 car = (u32)c.r[31];
     const auto preset = slick_test_car(car);
-    if (preset != slick::Preset::modern && preset != slick::Preset::w11) return;
+    const bool is_tt = slick::is_time_trial_session() || (g_car_count.load(std::memory_order_relaxed) <= 1);
+    if (preset != slick::Preset::modern && preset != slick::Preset::w11 && !(is_tt && car == slick::player_car())) return;
     struct Slot { u32 car = 0; u64 seen = 0; slick::DriveResponse response; };
     static thread_local std::array<Slot, 32> cars{};
     auto it = std::find_if(cars.begin(), cars.end(), [car](const Slot& s) { return s.car == car; });

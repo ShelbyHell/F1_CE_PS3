@@ -280,6 +280,30 @@ int main() {
     drs.update(dt, 220.0f, 1.0f, 0.45f, 0.0f, trailing_wake, false, true, true);
     TEST_CHECK(drs.state == slick::DrsState::Closed);
 
+    // 8. Time Trial Mode: DRS is constantly enabled/active without requiring a rival car ahead
+    slick::DrsController tt_drs;
+    slick::WakeInfo empty_wake{}; // No rival cars
+
+    // 8a. Standstill in pit lane -> Available
+    tt_drs.update(dt, 0.0f, 0.0f, 0.0f, 0.0f, empty_wake, false, false, true, true);
+    TEST_CHECK(tt_drs.state == slick::DrsState::Available);
+
+    // 8b. Accelerating onto track -> Automatically Opens
+    tt_drs.update(dt, 55.0f, 1.0f, 0.0f, 0.0f, empty_wake, false, false, true, true);
+    TEST_CHECK(tt_drs.state == slick::DrsState::Open);
+
+    // 8c. Flat out down straight -> Stays Open
+    tt_drs.update(dt, 290.0f, 1.0f, 0.0f, 0.0f, empty_wake, false, false, true, true);
+    TEST_CHECK(tt_drs.state == slick::DrsState::Open);
+
+    // 8d. Heavy braking into corner -> Closes for stability
+    tt_drs.update(dt, 260.0f, 0.0f, 0.0f, 0.75f, empty_wake, false, false, true, true);
+    TEST_CHECK(tt_drs.state == slick::DrsState::Closed);
+
+    // 8e. Getting back on throttle on corner exit -> Automatically Re-opens
+    tt_drs.update(dt, 120.0f, 0.85f, 0.05f, 0.0f, empty_wake, false, false, true, true);
+    TEST_CHECK(tt_drs.state == slick::DrsState::Open);
+
     // ========================================================================
     // G-Force Vector Tracker Checks
     // ========================================================================
